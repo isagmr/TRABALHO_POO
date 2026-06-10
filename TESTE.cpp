@@ -14,6 +14,57 @@
 using namespace std;
 //ID_DUPLA = 160 ou 25
 
+class Bomba {
+    private:
+    string Tag;
+    double Valor;
+    double Temperatura;
+
+    public:
+
+};
+
+
+class Valvula{ // Precisa ter abertura de 0 a 100%
+    private:
+    string Tag;
+    double Abertura; // 0-100%
+    bool Travada;
+    
+    public:
+    Valvula(string T){
+        Tag = T;
+        Aberura = 0.0;
+        Travada = false;
+    }
+
+    void Abrir(double Percentual){
+        if(Travada == true){
+            return;   // Se a válvula estiver travada não muda nada
+        }
+        
+        Abertura = Percentual;
+        
+        if(Abertura > 100.0){
+            Abertura = 100.0;
+        }
+        if (Abertura < 0.0){
+            Abertura = 0.0;
+        }
+    }
+
+    void Fechar(){
+        if (Travada == false){
+            Abertura = 0.0;
+        }
+    }
+
+    double getAbertura() const {
+        return Abertura;
+    }
+};
+
+
 class Sensor {
     protected: // Assim a main não altera nada mas os sensores que herdarem a classe pode realizar as alterações necessárias.
     string Tag;
@@ -133,7 +184,7 @@ class SensorPressao : public Sensor {
 
 };
 
-class SensorTemperatura : public Sensor {
+class SensorTemperatura : public Sensor { // Calcular temperatura com base nas vazoes quente/fria.
     public:
     SensorTemperatura(string T) : Sensor(T, "°C") {
        Valor = 23.0;
@@ -162,7 +213,7 @@ class EstacaoBombeamento{
    // Construtor: Inicializa o sistema com valores padrão quando ele é criado
     EstacaoBombeamento() {
         Nivel = 70.0;                          // Começa em um nível seguro
-        BombaEntradaLigada = false;            // Começa desligada
+        BombaEntradaLigada = false;            // Começa desligada       / BombaQuente e BombaFria como objetos.
         Pressao = 00.0;                        // Começa em zero
         ValvulaAberta = false;                 // Começa desligada
         Temperatura = 23.0;                    // Começa em uma temperaura ok
@@ -181,7 +232,7 @@ class EstacaoBombeamento{
         return BombaEntradaLigada;
    }
    
-    bool isValvulaAberta(){
+    bool isValvulaAberta(){  //ValvulaQuente e ValvulaFria com abertura 0-100%.
         return ValvulaAberta;
    }
    
