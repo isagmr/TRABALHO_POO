@@ -1,0 +1,3 @@
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR operador: Setpoint definido: 45.000000C | Volume: 60.000000 L/min
