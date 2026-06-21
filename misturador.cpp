@@ -679,6 +679,88 @@ class Valvula{ // Precisa ter abertura de 0 a 100%
     string getTag() const {return Tag; }
 };
 
+//serpentina -> equipamento que aquece ou resfria o líquido dos reservatórios
+enum class TipoSerpentina {
+    AQUECIMENTO,
+    RESFRIAMENTO
+};
+
+class Serpentina {
+    private:
+    string Tag;
+    TipoSerpentina Tipo;
+    double Potencia; //0 a 100%
+    bool Ligada;
+    bool Falha;
+    double TemperaturaAlvo; //temperatura que ela tenta manter
+
+    public:
+    MonitorEquipamento Monitor; //mesmo sistema de desgaste das bombas
+
+    Serpentina(string T, TipoSerpentina Tp, double TempAlvo) : Monitor(T) {
+        Tag = T;
+        Tipo = Tp;
+        Potencia = 0.0;
+        Ligada = false;
+        Falha = false;
+        TemperaturaAlvo = TempAlvo;
+    }
+
+    void Ligar(double PotenciaDesejada) {
+        if (Falha) return;
+        if (Monitor.getStatus() == StatusManutencao::MANUTENCAO) {
+            cout << "[AVISO] " << Tag << " esta em manutencao." << endl;
+            return;
+        }
+        Ligada = true;
+        Potencia = PotenciaDesejada;
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0) Potencia = 0.0;
+    }
+
+    void AjustarPotencia(double NovaPotencia) {
+        if (Falha || !Ligada) return;
+        Potencia  = NovaPotencia;
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0) Potencia = 0.0;
+    }
+
+    void Desligar() {
+        Ligada = false;
+        Potencia = 0.0;
+    }
+
+    void AtivarFalha() {
+        Falha = true;
+        Ligada = false;
+        Potencia = 0.0;
+    }
+
+    //calcula quanto a serpentina consegue mudar a temperatura do reservatório a cada ciclo baseado na sua potencia atual
+    double calcularVariacaoTemperatura() const {
+        if (!Ligada || Falha) return 0.0;
+
+        //100% de potencia causa variação máxima de 2 graus por ciclo; então a variação é proporcional a potencia atual
+        double variacaoMaxima = 2.0;
+        if (Tipo == TipoSerpentina::AQUECIMENTO) {
+            return (Potencia / 100.0) * variacaoMaxima; //positico aquece
+        } else {
+            return -(Potencia /100.0) * variacaoMaxima; //negativo resfria
+        }
+    }
+
+    void atualizarMonitor(double HorasCiclo) {
+        Monitor.atualizar(Ligada, Potencia, HorasCiclo);
+    }
+
+    bool estaLigada() const { return Ligada; }
+    bool temFalha() const { return Falha; }
+    double getPotencia() const { return Potencia; }
+    double getTemperaturaAlvo() const { return TemperaturaAlvo; }
+    string getTag() const { return Tag; }
+    TipoSerpentina getTipo() const { return Tipo; }
+};
+
 
 class Sensor {
     protected: // Assim a main não altera nada mas os sensores que herdarem a classe pode realizar as alterações necessárias.
@@ -800,15 +882,150 @@ class SensorPressao : public Sensor {
     }
 };
 
-class SensorTemperatura : public Sensor { // Calcular temperatura com base nas vazoes quente/fria.
+//3 sensores de temperatura: reservatorio quente, frio e tanque de mistura
+enum class TipoSensorTemp {
+    RESERVATORIO_QUENTE, //le a temp do reservatorio quente
+    RESERVATORIO_FRIO,
+    TANQUE_MISTURA
+};
+
+class SensorTemperatura : public Sensor {
+    private:
+    TipoSensorTemp Tipo;
+
     public:
-    SensorTemperatura(string T) : Sensor(T, "°C") {
-       Valor = 23.0;
+    SensorTemperatura(string T, TipoSensorTemp Tp, double ValorInicial) : Sensor(T, "°C") {
+        Tipo = Tp;
+        Valor = ValorInicial;
    }
    
+   //simula leitura do reservatório quente ou frio com pequeno ruído; a serpentina vai manter o valor perto do alvo, então o ruído é pequeno
    void simular(bool BombaLigada, bool ValvulaAberta) override{
-   
+        static random_device rd;
+        static mt19937 gen(rd());
+
+        //reservatorios tem o ruido pequeno pq a serpentina estabiliza
+        if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE || Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
+            uniform_real_distribution<double> ruido(-0.3, 0.3);
+            Valor += ruido(gen);
+        }
    }
+
+   //o tanque de mistura é atualizado pelo atualizarValorMistura()
+   void atualizarValorMistura(double NovaTemperatura) {
+    Valor = NovaTemperatura;
+   }
+
+   //aplica o efeito da serpentina no reservatorio
+   void atualizarValorReservatorio(double VariacaoSerpentina, double TempAlvo) {
+    Valor += VariacaoSerpentina;
+    //simula q o liquido resiste a mudanças bruscas de temperatura
+    if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE) {
+        if (Valor > 75.0) Valor = 75.0; //limite max de segurança
+        if (Valor < 55.0) Valor = 55.0 //minimo: caldeira sempre ajuda
+    } else if (Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
+        if (Valor > 30.0) Valor = 30.0;
+        if (Valor < 10.0) Valor = 10.0;
+    }
+   }
+
+   TipoSensorTemp getTipo() const { return Tipo; }
+};
+
+//reservatórios: cada um mantem sua temperatura com a serpentina automaticamente
+class ReservatorioQuente {
+    private:
+    string Tag;
+    Serpentina SerpentinaAquecimento;
+    SensorTemperatura Sensor;
+
+    const double TEMP_ALVO = 70.0;
+    const double TOLERANCIA = 2.0; //aceita entre 68 e 72 graus
+
+    public:
+    ReservatorioQuente(string T) : Tag(T), SerpentinaAquecimento(T + "-SERP", TipoSerpentina::AQUECIMENTO, 70.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_QUENTE, 70.0) {
+        //liga a serpentina na potencia media ao iniciar
+        SerpentinaAquecimento.Ligar(50.0);
+    }
+
+    //chamado a cada ciclo - controla a serpentina e atualiza o sensor
+    void atualizar(double HorasCiclo) {
+        double tempAtual = Sensor.getValor();
+
+        //controle automático da serpentina
+        if (tempAtual < TEMP_ALVO - TOLERANCIA) {
+            //temperatura cauiu - aumenta a potencia da serpentina
+            double novaPotencia = SerpentinaAquecimento.getPotencia() + 10.0;
+            SerpentinaAquecimento.AjustarPotencia(novaPotencia);
+        } else if (tempAtual > TEMP_ALVO + TOLERANCIA) {
+            //temperatura subiu dms - reduz a potencia
+            double novaPotencia = SerpentinaAquecimento.getPotencia - 10.0;
+            SerpentinaAquecimento.AjustarPotencia(novaPotencia);
+        }
+
+        //aplica o efeito da serpentina na temperatura do sensor
+        double variacao = SerpentinaAquecimento.calcularVariacaoTemperatura();
+        Sensor.atualizarValorReservatorio(variacao, TEMP_ALVO);
+        Sensor.simular(false, false); //aplica o ruido natural
+
+        //atualiza o monitor de desgaste da serpentina
+        SerpentinaAquecimento.atualizarMonitor(HorasCiclo);
+    }
+
+    void simularFalhaSerpentina() {
+        SerpentinaAquecimento.AtivarFalha();
+        cout << "[FALHA] Serpentina do reservatorio quente falhou!" << endl;
+    }
+
+    double getTemperatura() const { return Sensor.getValor(); }
+    string getTagSensor() const { return Sensor.getTag(); }
+    Serpentina& getSerpentina() { return SerpentinaAquecimento; }
+    SensorTemperatura& getSensor() { return Sensor; }
+};
+
+class ReservatorioFrio {
+    private:
+    string Tag;
+    Serpentina SerpentinaResfriamento;
+    SensorTemperatura Sensor;
+
+    const double TEMP_ALVO = 20.0;
+    const double TOLERANCIA = 2.0; //aceita entre 18 e 20 graus
+
+    public:
+    ReservatorioFrio(string T) : Tag(T), SerpentinaResfriamento(T + "-SERP", TipoSerpentina::RESFRIAMENTO, 20.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_FRIO, 20.0) {
+        SerpentinaResfriamento.Ligar(50.0);
+    }
+
+    void atualizar(double HorasCiclo) {
+        double tempAtual = Sensor.getValor();
+
+        if (tempAtual > TEMP_ALVO + TOLERANCIA) {
+            //temp subiu - aumenta potencia de resfriamento
+            double novaPotencia = SerpentinaResfriamento.getPotencia() + 10.0;
+            SerpentinaRefriamento.AjustarPotencia(novaPotencia);
+        } else if (tempAtual < TEMP_ALVO - TOLERANCIA) {
+            //temp caiu - reduz potencia
+            double novaPotencia  = SerpentinaResfriamento.getPotencia() - 10.0;
+            SerpentinaResfriamento.AjustarPotencia(novaPotencia);
+        }
+
+        double variacao = SerpentinaResfriamento.calcularVariacaoTemperatura();
+        Sensor.atualizarValorReservatorio(variacao, TEMP_ALVO);
+        Sensor.simular(false, false);
+
+        SerpentinaResfriamento.atualizarMonitor(HorasCiclo);
+    }
+
+    void simularFalhaSerpentina() {
+        SerpentinaResfriamento.AtivarFalha();
+        cout << "[FALHA] Serpentina do reservatório frio falhou!" << endl;
+    }
+
+    double getTemperatura()     const { return Sensor.getValor(); }
+    string getTagSensor()       const { return Sensor.getTag(); }
+    Serpentina& getSerpentina()       { return SerpentinaResfriamento; }
+    SensorTemperatura& getSensor()    { return Sensor; }
 };
 
 class EstacaoBombeamento{
