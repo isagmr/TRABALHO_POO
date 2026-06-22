@@ -680,7 +680,8 @@ class Valvula{ // Precisa ter abertura de 0 a 100%
 };
 
 //serpentina -> equipamento que aquece ou resfria o líquido dos reservatórios
-enum class TipoSerpentina {
+//ela é basicamente um cano em espiral que passa por dentro de um tanque. denttro dele pode passar água quente, vapor ou gás refrigerante, aí controla a temperatura
+enum class TipoSerpentina { //criando uma lista de opções fixas; a serpentina no simulador só pode ser de dois tipos, evitando q alguem digite o tipo errado como texto
     AQUECIMENTO,
     RESFRIAMENTO
 };
@@ -695,9 +696,10 @@ class Serpentina {
     double TemperaturaAlvo; //temperatura que ela tenta manter
 
     public:
-    MonitorEquipamento Monitor; //mesmo sistema de desgaste das bombas
+    MonitorEquipamento Monitor; //mesmo sistema de desgaste das bombas; como está no bloco public, o GerenciadorManutencao vai conseguir ler e alterar a saúde  da serpentina
 
-    Serpentina(string T, TipoSerpentina Tp, double TempAlvo) : Monitor(T) {
+    Serpentina(string T, TipoSerpentina Tp, double TempAlvo) : Monitor(T) { //construtor; passamos a tag, o tipo e a temperatura alvo; ': Monitor(T)' cria o monitoramneto da saúde dela passando o nome automaticamente
+       //configurando os valores iniciais
         Tag = T;
         Tipo = Tp;
         Potencia = 0.0;
@@ -707,19 +709,21 @@ class Serpentina {
     }
 
     void Ligar(double PotenciaDesejada) {
-        if (Falha) return;
-        if (Monitor.getStatus() == StatusManutencao::MANUTENCAO) {
+        if (Falha) return; //maquina quebrada não liga!
+        if (Monitor.getStatus() == StatusManutencao::MANUTENCAO) { //maquina em manutenção NÃO LIGA
             cout << "[AVISO] " << Tag << " esta em manutencao." << endl;
             return;
         }
         Ligada = true;
         Potencia = PotenciaDesejada;
+        //se o operador digitar 150%, o sistema limita pra 100%, se digitar negativo, limita pra 0
         if (Potencia > 100.0) Potencia = 100.0;
         if (Potencia < 0.0) Potencia = 0.0;
     }
 
     void AjustarPotencia(double NovaPotencia) {
         if (Falha || !Ligada) return;
+        //atualiza o valor e define os limites
         Potencia  = NovaPotencia;
         if (Potencia > 100.0) Potencia = 100.0;
         if (Potencia < 0.0) Potencia = 0.0;
@@ -730,7 +734,7 @@ class Serpentina {
         Potencia = 0.0;
     }
 
-    void AtivarFalha() {
+    void AtivarFalha() { //força uma pane no equipamento; simula acidente ou quebra; desliga tudo e fica travada em estado de erro
         Falha = true;
         Ligada = false;
         Potencia = 0.0;
@@ -738,7 +742,7 @@ class Serpentina {
 
     //calcula quanto a serpentina consegue mudar a temperatura do reservatório a cada ciclo baseado na sua potencia atual
     double calcularVariacaoTemperatura() const {
-        if (!Ligada || Falha) return 0.0;
+        if (!Ligada || Falha) return 0.0; //se estiver desligada ou quebrada, n esquenta nem esfria
 
         //100% de potencia causa variação máxima de 2 graus por ciclo; então a variação é proporcional a potencia atual
         double variacaoMaxima = 2.0;
@@ -749,10 +753,11 @@ class Serpentina {
         }
     }
 
-    void atualizarMonitor(double HorasCiclo) {
+    void atualizarMonitor(double HorasCiclo) { //repassando os dadsos pro monitor calcular o desgaste termico a cada ciclo
         Monitor.atualizar(Ligada, Potencia, HorasCiclo);
     }
 
+    //bloco de funlções get que só entrgam cópias dos valores privados, com o const garantindo que os dados não vão ser alterados
     bool estaLigada() const { return Ligada; }
     bool temFalha() const { return Falha; }
     double getPotencia() const { return Potencia; }
@@ -889,25 +894,25 @@ enum class TipoSensorTemp {
     TANQUE_MISTURA
 };
 
-class SensorTemperatura : public Sensor {
+class SensorTemperatura : public Sensor { //herda a classe mãe Sensor; ganha automaticamente todas as variáveis e funções que a classe mãe tiver
     private:
-    TipoSensorTemp Tipo;
+    TipoSensorTemp Tipo; //guarda o tipo do sensor baseado no enum
 
     public:
-    SensorTemperatura(string T, TipoSensorTemp Tp, double ValorInicial) : Sensor(T, "°C") {
+    SensorTemperatura(string T, TipoSensorTemp Tp, double ValorInicial) : Sensor(T, "°C") { //construtor
         Tipo = Tp;
         Valor = ValorInicial;
    }
    
    //simula leitura do reservatório quente ou frio com pequeno ruído; a serpentina vai manter o valor perto do alvo, então o ruído é pequeno
-   void simular(bool BombaLigada, bool ValvulaAberta) override{
+   void simular(bool BombaLigada, bool ValvulaAberta) override{ //override avisa ao compilador q estamos reescrevendo a função simular q já existia na classe mãe; recebe o estado das bombas e válvulas só pq a classe mãe exige, mas não usamos
         static random_device rd;
         static mt19937 gen(rd());
 
         //reservatorios tem o ruido pequeno pq a serpentina estabiliza
         if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE || Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
-            uniform_real_distribution<double> ruido(-0.3, 0.3);
-            Valor += ruido(gen);
+            uniform_real_distribution<double> ruido(-0.3, 0.3); //cria um sorteio de numeros quebrados entre -0,3 e 0,3 graus
+            Valor += ruido(gen); //simula o ruido eletrico adicionando os valores sorteados antes; o sensor nunca vai medir a temperatura perfeitamente estatica, sempre vai ter uma pequena oscilação
         }
    }
 
@@ -922,17 +927,18 @@ class SensorTemperatura : public Sensor {
     //simula q o liquido resiste a mudanças bruscas de temperatura
     if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE) {
         if (Valor > 75.0) Valor = 75.0; //limite max de segurança
-        if (Valor < 55.0) Valor = 55.0 //minimo: caldeira sempre ajuda
+        if (Valor < 55.0) Valor = 55.0; //minimo: caldeira sempre ajuda
     } else if (Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
         if (Valor > 30.0) Valor = 30.0;
         if (Valor < 10.0) Valor = 10.0;
     }
    }
 
-   TipoSensorTemp getTipo() const { return Tipo; }
+   TipoSensorTemp getTipo() const { return Tipo; } //entrega qual a utilidade e o tipo do sensor
 };
 
 //reservatórios: cada um mantem sua temperatura com a serpentina automaticamente
+//cria o controle automático (tipo um termostato de ar-condicionado) dos tanques e calcula a física real de mistura de líquidos
 class ReservatorioQuente {
     private:
     string Tag;
@@ -943,7 +949,7 @@ class ReservatorioQuente {
     const double TOLERANCIA = 2.0; //aceita entre 68 e 72 graus
 
     public:
-    ReservatorioQuente(string T) : Tag(T), SerpentinaAquecimento(T + "-SERP", TipoSerpentina::AQUECIMENTO, 70.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_QUENTE, 70.0) {
+    ReservatorioQuente(string T) : Tag(T), SerpentinaAquecimento(T + "-SERP", TipoSerpentina::AQUECIMENTO, 70.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_QUENTE, 70.0) { //adiciona o nome do sensor ao sufixo
         //liga a serpentina na potencia media ao iniciar
         SerpentinaAquecimento.Ligar(50.0);
     }
@@ -959,7 +965,7 @@ class ReservatorioQuente {
             SerpentinaAquecimento.AjustarPotencia(novaPotencia);
         } else if (tempAtual > TEMP_ALVO + TOLERANCIA) {
             //temperatura subiu dms - reduz a potencia
-            double novaPotencia = SerpentinaAquecimento.getPotencia - 10.0;
+            double novaPotencia = SerpentinaAquecimento.getPotencia() - 10.0;
             SerpentinaAquecimento.AjustarPotencia(novaPotencia);
         }
 
@@ -972,7 +978,7 @@ class ReservatorioQuente {
         SerpentinaAquecimento.atualizarMonitor(HorasCiclo);
     }
 
-    void simularFalhaSerpentina() {
+    void simularFalhaSerpentina() { //teste pra quebrar a serpentina de propósito e ver se o sistema de alarmes funciona
         SerpentinaAquecimento.AtivarFalha();
         cout << "[FALHA] Serpentina do reservatorio quente falhou!" << endl;
     }
@@ -1003,7 +1009,7 @@ class ReservatorioFrio {
         if (tempAtual > TEMP_ALVO + TOLERANCIA) {
             //temp subiu - aumenta potencia de resfriamento
             double novaPotencia = SerpentinaResfriamento.getPotencia() + 10.0;
-            SerpentinaRefriamento.AjustarPotencia(novaPotencia);
+            SerpentinaResfriamento.AjustarPotencia(novaPotencia);
         } else if (tempAtual < TEMP_ALVO - TOLERANCIA) {
             //temp caiu - reduz potencia
             double novaPotencia  = SerpentinaResfriamento.getPotencia() - 10.0;
@@ -1026,6 +1032,69 @@ class ReservatorioFrio {
     string getTagSensor()       const { return Sensor.getTag(); }
     Serpentina& getSerpentina()       { return SerpentinaResfriamento; }
     SensorTemperatura& getSensor()    { return Sensor; }
+};
+
+//o tanque de mistura recebe água quente e fria, calcula temperatura e monitora o nível
+
+class TanqueMistura {
+    private:
+    string Tag;
+    double Nivel;
+    double Pressao;
+    //3 sensores independentes monitorando o tanque
+    SensorTemperatura SensorTemp;
+    SensorNivel SensorNiv;
+    SensorPressao SensorPress;
+    //limites de segurança usados pra disparar alarmes no sistema caso o tanque mude de estado
+    const double LIMITE_NIVEL_BAIXO = 27.5;
+    const double LIMITE_NIVEL_ALTO = 82.5;
+    const double LIMITE_NIVEL_CRITICO = 95.0;
+    const double LIMITE_PRESSAO_ALTA = 6.5;
+
+    public:
+    //O tanque nasce preenchido até a metade (50%), com pressão atmosférica padrão (1.0 atm), temperatura ambiente de 23°C e gera as tags automáticas dos três sensores (-TT para temperatura, -LT para nível/líquido, -PT para pressão)
+    TanqueMistura(string T) : Tag(T), Nivel(50.0), Pressao(1.0), SensorTemp(T + "-TT", TipoSensorTemp::TANQUE_MISTURA, 23.0), SensorNiv(T + "-LT"), SensorPress(T + "-PT") { //construtor
+    }
+
+    //Chamado a cada ciclo com as vazões e temperatura das fontes
+    //precisa saber quanta água está entrando de cada lado e se a bomba de escoamento ta ligada pra esvaziar o tanque
+    void atualizar(double VazaoQuente, double VazaoFria, double TempQuente, double TempFria, bool BombaSaidaLigada, double HorasCiclo) {
+        //atualiza a temperatura pela fórmula de mistura
+        //se tiver água entrando entrando ele calcula a media ponderada termica e injeta no direto no sensor do tanque
+        double somaVazoes = VazaoQuente + VazaoFria;
+        if (somaVazoes > 0.0) {
+            double tempMistura = (VazaoQuente * TempQuente + VazaoFria * TempFria) / somaVazoes;
+            SensorTemp.atualizarValorMistura(tempMistura);
+        }
+
+        //atualiza o nivel -> entrada menos saida
+        double entrada = (VazaoQuente + VazaoFria) * 0.02; //converte L/min em % por ciclo
+        double saida = BombaSaidaLigada ? 1.0 : 0.2; //se a bomba de saida estiver ligada ele esvazia 1% por ciclo, se não, perde 0,2% por vazamento ou evaporação simulada
+        Nivel += entrada - saida;
+        if (Nivel > 100.0) Nivel = 100.0;
+        if (Nivel < 0.0) Nivel = 0.0;
+
+        //atualiza a pressao com base no nivel e bomba de saida
+        Pressao = 1.0 + (Nivel / 100.0) * 2.0; //começa com 1atm e conforme o nivel sobe o peso da agua adiciona até mais 2 atm 
+        if (BombaSaidaLigada) Pressao += 2.0; //se a bomba estiver ligada ela gera uma CONTRAPRESSAO de mais 2 atm
+        if (Pressao > 10.0) Pressao = 10.0; //trava maxima de 10 atm
+
+        //injeta os valores nos sensores
+        SensorNiv.simular(somaVazoes > 0, false);
+        SensorPress.simular(BombaSaidaLigada, false);
+    }
+//bloco de encapsulamento q contem os getters pra ler os estados sem violar o escopo privado
+    double getTemperatura() const { return SensorTemp.getValor(); }
+    double getNivel() const { return Nivel; }
+    double getPressao() const { return Pressao; }
+    double getLimiteBaixo() const { return LIMITE_NIVEL_BAIXO; }
+    double getLimiteAlto() const { return LIMITE_NIVEL_ALTO; }
+    double getLimiteCritico() const { return LIMITE_NIVEL_CRITICO; }
+    double getLimitePressao() const { return LIMITE_PRESSAO_ALTA; }
+
+    SensorTemperatura& getSensorTemp() { return SensorTemp; }
+    SensorNivel& getSensorNivel() { return SensorNiv; }
+    SensorPressao& getSensorPress() { return SensorPress; }
 };
 
 class EstacaoBombeamento{
