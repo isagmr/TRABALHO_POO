@@ -18,6 +18,104 @@
 using namespace std;
 //ID_DUPLA = 160 ou 25
 
+class GerenciadorComandos {
+// A seção 'private' garante o Encapsulamento. Nenhuma outra parte do código
+// consegue alterar essas variáveis diretamente, apenas através dos métodos da classe.
+private:
+    double setpoint_temp;      // Guarda a temperatura alvo desejada
+    double vazao_alvo;         // Guarda a vazão desejada do sistema
+    bool override_bomba_q;     // True se o admin ligar a bomba quente manualmente
+    bool override_bomba_f;     // True se o admin ligar a bomba fria manualmente
+    bool parada_emergencia;    // True se o botão de emergência for acionado
+    std::string nome_arquivo;  // Nome do arquivo que será lido (comandos.json)
+
+    // O Python manda o texto assim: "50.0", ou true, (com aspas ou vírgulas).
+    // Essa função remove esses caracteres inúteis para não quebrar a conversão matemática.
+    // O '&' significa que estamos alterando a variável original na memória (passagem por referência).
+    void limparTexto(std::string &valor) {
+        std::string limpo = "";
+        for (char c : valor) {
+            // Se o caractere não for vírgula, nem aspas duplas, nem espaço, nós o guardamos
+            if (c != ',' && c != '"' && c != ' ') {
+                limpo += c;
+            }
+        }
+        valor = limpo; // Substitui o texto sujo pelo texto limpo
+    }
+    public:
+    GerenciadorComandos(std::string arquivo = "comandos.json") {
+        nome_arquivo = arquivo;
+        setpoint_temp = 50.0;     // Temperatura segura de partida
+        vazao_alvo = 2.0;         // Vazão segura de partida
+        override_bomba_q = false; // Bombas iniciam em modo automático (desligado)
+        override_bomba_f = false; 
+        parada_emergencia = false;// O sistema inicia operante
+    }
+    // Método Principal: Deve ser chamado a cada ciclo do 'while' para ler as novidades
+    void atualizarComandos() {
+        // Cria o objeto 'arquivo' e tenta abrir o comandos.json
+        std::ifstream arquivo(nome_arquivo);
+        
+        // Proteção: Se o arquivo não existir (o site ainda não mandou nada),
+        // encerra a função silenciosamente e mantém os valores antigos.
+        if (!arquivo.is_open()) {
+            return; 
+        }
+
+        std::string linha;
+        
+        // O comando getline vai ler o arquivo de texto linha por linha até o fim
+        while (std::getline(arquivo, linha)) {
+            
+            // 1. VERIFICAÇÃO DO SETPOINT
+            // O std::string::npos significa "Não Encontrado" (No Position).
+            // Se a busca for DIFERENTE de não encontrado, significa que achamos a palavra!
+            if (linha.find("\"setpoint_temp\"") != std::string::npos) {
+                size_t pos = linha.find(":"); // Acha a posição do caractere dois pontos (:)
+                std::string valorStr = linha.substr(pos + 1); // Corta a linha pegando tudo após os ':'
+                limparTexto(valorStr); // Limpa aspas e vírgulas
+                setpoint_temp = std::stod(valorStr); // std::stod converte a String Para Double
+            }
+            // 2. VERIFICAÇÃO DA VAZÃO
+            else if (linha.find("\"vazao_alvo\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                vazao_alvo = std::stod(valorStr); // Converte para decimal
+            }
+            // 3. VERIFICAÇÃO DO COMANDO MANUAL DA BOMBA QUENTE
+            else if (linha.find("\"override_bomba_q\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                // Se a string contiver a palavra "true", a variável booleana vira verdadeira
+                override_bomba_q = (valorStr == "true"); 
+            }
+            // 4. VERIFICAÇÃO DO COMANDO MANUAL DA BOMBA FRIA
+            else if (linha.find("\"override_bomba_f\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                override_bomba_f = (valorStr == "true");
+            }
+            // 5. VERIFICAÇÃO DA PARADA DE EMERGÊNCIA
+            else if (linha.find("\"parada_emergencia\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                parada_emergencia = (valorStr == "true");
+            }
+        }
+        arquivo.close(); 
+    }
+    double getSetpointTemp() const    { return setpoint_temp; }
+    double getVazaoAlvo() const       { return vazao_alvo; }
+    bool getOverrideBombaQ() const    { return override_bomba_q; }
+    bool getOverrideBombaF() const    { return override_bomba_f; }
+    bool getParadaEmergencia() const  { return parada_emergencia; }
+};
+
+
 class RegistroSistema {
     private:
     ofstream ArquivoAlarmes;
@@ -121,8 +219,7 @@ class GeradorJSON {
     public:
     GeradorJSON() {
         //abre o arquivo no modo append pra não apagar leituras antigas
-        Arquivo.open("leituras.jsonl", ios::app);
-        Arquivo << "// NOVA SESSÃO " << endl;
+        Arquivo.open("leituras.json", ios::app);
     }
 
     ~GeradorJSON() {
@@ -131,22 +228,21 @@ class GeradorJSON {
 
     //escreve uma leitura do sensor no arquivo
     void escreverLeitura(string tag, string variavel, double valor, string unidade, string status, int ciclo) {
-        Arquivo << "{" << "\"tipo\":\"leitura\"," << "\"tag\":\"" << tag << "\"," << "\"variavel\":\"" << variavel << "\"," << "\"valor\":" << valor << "," << "\"unidade\":\"" << unidade << "\"," << "\"status\":\"" << status << "\", << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
-    }
+    Arquivo << "{" << "\"sensor\":\"" << tag << "\"," << "\"valor\":" << valor << "," << "\"unidade\":\"" << unidade << "\"," << "\"status\":\"" << status << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;    }
 
     // Escreve o estado de um atuador (bomba ou válvula)
     void escreverAtuador(string nome, string estado, double valor, int ciclo) {
-        Arquivo << "{" << "\"tipo\":\"atuador\"," << "\"nome\":\"" << nome << "\", << "\"estado\":\"" << estado << "\"," << "\"valor\":" << valor << "," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
+        Arquivo << "{" << "\"tipo\":\"atuador\"," << "\"nome\":\"" << nome << "\"," << "\"estado\":\"" << estado << "\"," << "\"valor\":" << valor << "," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
     }
 
     //escreve um alarme ativo
     void escreverAlarme(string codigo, string severidade, int ciclo) {
-        Arquivo << "{" << "\"tipo\":\"alarme\"," << "\"codigo\":\"" << codigo << "\","<< "\"severidade\":\"" << severidade << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << cicl<< "}" << endl;
+        Arquivo << "{" << "\"tipo\":\"alarme\"," << "\"codigo\":\"" << codigo << "\","<< "\"severidade\":\"" << severidade << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo<< "}" << endl;
     }
 
     //escreve um comando executado pelo operador
     void escreverComando(string nomeComando, string usuario, int ciclo) {
-        Arquivo << "{" << "\"tipo\":\"comando\"," << "\"nome\":\"" << nomeComando << "\"," << "\"usuario\":\"" << usuario << "\", << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
+        Arquivo << "{" << "\"tipo\":\"comando\"," << "\"nome\":\"" << nomeComando << "\"," << "\"usuario\":\"" << usuario << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
     }
 };
 
@@ -1267,7 +1363,7 @@ class PlantaMistura {
         Alarmes.push_back(Codigo);
         cout << "[ALARME] " << Codigo << endl;
     }
-
+    // a partir daqui recebe comandos do supervisor
     void resetarAlarmes() { Alarmes.clear(); }
     vector<string> getAlarmes() const { return Alarmes; }
 
@@ -1280,6 +1376,33 @@ class PlantaMistura {
     //simular a falha surante a demonstração
     void simularFalhaSerpentinaQuente() { ResQuente.simularFalhaSerpentina(); }
     void simularFalhaSerpentinaFria() { ResFrio.simularFalhaSerpentina(); }
+
+    // NOVA FUNÇÃO: Recebe as ordens do Python e aplica na PlantaMistura
+    void receberComandosSupervisorio(double novo_setpoint, bool emergencia, bool forcar_q, bool forcar_f) {
+        if (emergencia) {
+            cout << "\n🚨 [SUPERVISÓRIO] PARADA DE EMERGÊNCIA ACIONADA! 🚨\n";
+            fecharEntradas();
+            desligarBombaSaida();
+            adicionarAlarme("EMERGENCIA_SUPERVISOR");
+        } else {
+            // Só altera se o supervisor mandar um valor de temperatura novo
+            if (novo_setpoint != SetpointTemperatura) {
+                // Usa a calculadora que o seu grupo criou para ajustar as válvulas!
+                CalculadoraDemanda::Parametros p = CalculadoraDemanda::calcular(novo_setpoint, 2.0); 
+                aplicarParametros(p);
+                setSetpointTemperatura(novo_setpoint);
+            }
+            
+            // Força as bombas usando as classes ParBombas do seu projeto
+            if (forcar_q) {
+                BombasQuente.getPrincipal().Ligar(100.0); 
+            }
+            if (forcar_f) {
+                BombasFria.getPrincipal().Ligar(100.0);
+            }
+        }
+    }
+
 };
 
 // Essa aqui é a classe Pai - 'contrato' que as regras devem seguir 
@@ -1447,7 +1570,8 @@ int main() {
     SistemaAcesso acesso(registro);
     GerenciadorManutencao gerManutencao(registro);
     GeradorJSON json;
-
+    GerenciadorComandos receptor("comandos.json");
+    
     string nome, senha;
     cout << "=== LOGIN ===" << endl;
     cout << "Usuario: "; cin >> nome;
@@ -1518,6 +1642,7 @@ int main() {
     cout << "  f       = simular falha serpentina (demonstracao)" << endl;
     cout << "  q       = encerrar" << endl;
 
+    bool modo_auto = false;    //para alternar entre o modo manual (terminal) e o modo automático (site)
     int ciclo = 1;
     while (true) {
         registro.setCiclo(ciclo);
@@ -1576,6 +1701,21 @@ int main() {
             json.escreverAlarme(alarme, "media", ciclo);
         }
 
+        //Dispara a função que lê o arquivo. Se o admin apertou algo no site, o receptor vai atualizar os valores dentro dele.
+        receptor.atualizarComandos();
+        //extrai as ordens vindas do arquivo JSON enviado pelo servidor web
+        bool emergencia = receptor.getParadaEmergencia(); 
+        double setpoint = receptor.getSetpointTemp();     
+
+        //Aplica as ordens do site (temperatura e overrides das bombas) diretamente na planta
+        planta.receberComandosSupervisorio(setpoint, emergencia, receptor.getOverrideBombaQ(), receptor.getOverrideBombaF());
+
+        if (emergencia) {
+            std::cout << "ALARME DE EMERGENCIA ATIVADO! Desligando processo." << std::endl;
+        } else {
+            std::cout << "Controlando temperatura buscando: " << setpoint << " C" << std::endl;
+        }
+
         // Relatório do ciclo
         cout << " [RESERVATORIOS]"
              << " | Quente: " << planta.getTempReservatorioQ() << "C"
@@ -1594,16 +1734,32 @@ int main() {
              << "C | Status: "<< planta.getSerpentinaQ().Monitor.getStatusTexto()
              << endl;
 
+        //Se o modo automático estiver ligado, pula a leitura do teclado (cin/getline), 
+        // aguarda 5 segundos para a simulação rodar e reinicia o ciclo ouvindo apenas o site
+            if (modo_auto) {
+            this_thread::sleep_for(chrono::seconds(5));
+            ciclo++;
+            continue; 
+        }
+
         cout << "\nComando (ENTER para avancar): ";
         string cmd;
         cin.ignore();
         getline(cin, cmd);
 
+        //se o usuário digitar 'p' no terminal, ativa o piloto automático e passa o controle para a interface web
+        if (cmd == "p") {
+            modo_auto = true;
+            cout << "\n>>> MODO AUTOMATICO ATIVADO! <<<\n";
+            ciclo++;
+            continue;
+        }
+
         if (cmd == "q") {
             cout << "Encerrando." << endl;
             break;
 
-        } } else if (cmd == "s") {
+         } else if (cmd == "s") {
     double novaTemp, novoVol;
     cout << "Nova temperatura desejada: "; cin >> novaTemp;
     cout << "Novo volume por minuto:     "; cin >> novoVol;

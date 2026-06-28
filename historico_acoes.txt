@@ -1,3 +1,20 @@
 
 === NOVA SESSAO ===
 [CICLO 0] OPERADOR operador: Setpoint definido: 45.000000C | Volume: 60.000000 L/min
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR admin: Setpoint definido: 32.000000C | Volume: 2.100000 L/min
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR admin: Setpoint definido: 65.300000C | Volume: 2.500000 L/min
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR admin: Setpoint definido: 70.000000C | Volume: 12.300000 L/min
+
+=== NOVA SESSAO ===
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR admin: Setpoint definido: 50.000000C | Volume: 2.000000 L/min
+
+=== NOVA SESSAO ===
+[CICLO 0] OPERADOR admin: Setpoint definido: 52.000000C | Volume: 21.000000 L/min

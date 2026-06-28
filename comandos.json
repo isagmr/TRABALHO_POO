@@ -1,0 +1,8 @@
+{
+    "setpoint_temp": 50.0,
+    "vazao_alvo": 2.0,
+    "override_bomba_q": false,
+    "override_bomba_f": true,
+    "parada_emergencia": false,
+    "operador_ativo": "Administrador"
+}

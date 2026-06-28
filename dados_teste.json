@@ -1,0 +1,12 @@
+{"timestamp": "21:00:00", "sensor": "TEMP_SERPENTINA_QUENTE", "valor": 42.5, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:00:00", "sensor": "TEMP_SERPENTINA_FRIA", "valor": 15.2, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:00:00", "sensor": "NIVEL_RESERVATORIO", "valor": 70.0, "unidade": "%", "status": "OK"}
+{"timestamp": "21:00:00", "sensor": "VAZAO_BOMBA", "valor": 45.0, "unidade": "L/min", "status": "OK"}
+{"timestamp": "21:05:00", "sensor": "TEMP_SERPENTINA_QUENTE", "valor": 44.1, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:05:00", "sensor": "TEMP_SERPENTINA_FRIA", "valor": 15.8, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:05:00", "sensor": "NIVEL_RESERVATORIO", "valor": 68.5, "unidade": "%", "status": "OK"}
+{"timestamp": "21:05:00", "sensor": "VAZAO_BOMBA", "valor": 48.2, "unidade": "L/min", "status": "OK"}
+{"timestamp": "21:10:00", "sensor": "TEMP_SERPENTINA_QUENTE", "valor": 45.8, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:10:00", "sensor": "TEMP_SERPENTINA_FRIA", "valor": 16.1, "unidade": "°C", "status": "OK"}
+{"timestamp": "21:10:00", "sensor": "NIVEL_RESERVATORIO", "valor": 65.2, "unidade": "%", "status": "OK"}
+{"timestamp": "21:10:00", "sensor": "VAZAO_BOMBA", "valor": 52.0, "unidade": "L/min", "status": "ALERTA"}
