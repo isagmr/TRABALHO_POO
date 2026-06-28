@@ -27,6 +27,7 @@ private:
     bool override_bomba_q;     // True se o admin ligar a bomba quente manualmente
     bool override_bomba_f;     // True se o admin ligar a bomba fria manualmente
     bool parada_emergencia;    // True se o botão de emergência for acionado
+    bool resetar_alarmes;
     std::string nome_arquivo;  // Nome do arquivo que será lido (comandos.json)
 
     // O Python manda o texto assim: "50.0", ou true, (com aspas ou vírgulas).
@@ -47,6 +48,7 @@ private:
         nome_arquivo = arquivo;
         setpoint_temp = 50.0;     // Temperatura segura de partida
         vazao_alvo = 2.0;         // Vazão segura de partida
+        resetar_alarmes = false;
         override_bomba_q = false; // Bombas iniciam em modo automático (desligado)
         override_bomba_f = false; 
         parada_emergencia = false;// O sistema inicia operante
@@ -104,10 +106,17 @@ private:
                 std::string valorStr = linha.substr(pos + 1);
                 limparTexto(valorStr);
                 parada_emergencia = (valorStr == "true");
+            } else if (linha.find("\"resetar_alarmes\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                resetar_alarmes = (valorStr == "true");
             }
         }
         arquivo.close(); 
     }
+
+    bool getResetarAlarmes() const { return resetar_alarmes; }
     double getSetpointTemp() const    { return setpoint_temp; }
     double getVazaoAlvo() const       { return vazao_alvo; }
     bool getOverrideBombaQ() const    { return override_bomba_q; }
@@ -896,7 +905,7 @@ class Serpentina {
         if (!Ligada || Falha) return 0.0; //se estiver desligada ou quebrada, n esquenta nem esfria
 
         //100% de potencia causa variação máxima de 2 graus por ciclo; então a variação é proporcional a potencia atual
-        double variacaoMaxima = 2.0;
+        double variacaoMaxima = 0.5;
         if (Tipo == TipoSerpentina::AQUECIMENTO) {
             return (Potencia / 100.0) * variacaoMaxima; //positico aquece
         } else {
@@ -1092,7 +1101,7 @@ class SensorTemperatura : public Sensor { //herda a classe mãe Sensor; ganha au
 
         //reservatorios tem o ruido pequeno pq a serpentina estabiliza
         if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE || Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
-            uniform_real_distribution<double> ruido(-0.3, 0.3); //cria um sorteio de numeros quebrados entre -0,3 e 0,3 graus
+            uniform_real_distribution<double> ruido(-0.05, 0.05); //cria um sorteio de numeros quebrados entre -0,05 e 0,05 graus
             Valor += ruido(gen); //simula o ruido eletrico adicionando os valores sorteados antes; o sensor nunca vai medir a temperatura perfeitamente estatica, sempre vai ter uma pequena oscilação
         }
    }
@@ -1272,7 +1281,7 @@ class TanqueMistura {
     double getLimiteAlto() const { return LIMITE_NIVEL_ALTO; }
     double getLimiteCritico() const { return LIMITE_NIVEL_CRITICO; }
     double getLimitePressao() const { return LIMITE_PRESSAO_ALTA; }
-
+    
     SensorTemperatura& getSensorTemp() { return SensorTemp; }
     SensorNivel& getSensorNivel() { return SensorNiv; }
     SensorPressao& getSensorPress() { return SensorPress; }
@@ -1291,9 +1300,13 @@ class PlantaMistura {
     bool BombaSaidaLigada;
     double SetpointTemperatura;
     vector<string> Alarmes;
+    double VolumeSolicitado;    // L/min que o operador quer retirar
+    bool   ProcessoAtivo;       // true enquanto estiver atendendo um pedido
 
     public:
     PlantaMistura() : ResQuente("RES-Q"), ResFrio("RES-F"), Tanque("TQ-MIX"), BombasQuente("BOMBA-Q1", "BOMBA-Q2", 80.0), BombasFria("BOMBA-F1", "BOMBA-F2", 80.0), ValvulaQuente("FV-QUENTE"), ValvulaFria("FV-FRIA") {
+        VolumeSolicitado = 0.0;
+        ProcessoAtivo = false;
         BombaSaidaLigada = false;
         SetpointTemperatura = 45.0;
     }
@@ -1406,6 +1419,34 @@ class PlantaMistura {
         }
     }
 
+    double getAberturaValvulaQuente() const { return ValvulaQuente.getAbertura(); }
+    double getAberturaValvulaFria()   const { return ValvulaFria.getAbertura(); }
+
+    // Operador faz o pedido: temperatura e volume que quer retirar
+    void solicitarProcesso(double TempDesejada, double VolumeLitros) {
+    // Verifica se tem volume suficiente no tanque
+    // 1% de nível equivale a aproximadamente 10 litros na simulação
+        double volumeDisponivel = (getNivelTanque() - getLimiteBaixo()) * 10.0;
+        if (VolumeLitros > volumeDisponivel) {
+            adicionarAlarme("BLOQUEIO: volume solicitado maior que disponivel no tanque");
+            cout << "[BLOQUEIO] Volume disponivel: " << volumeDisponivel
+                 << " L | Solicitado: " << VolumeLitros << " L" << endl;
+            return;
+        }
+        VolumeSolicitado   = VolumeLitros;
+        ProcessoAtivo      = true;
+        BombaSaidaLigada   = true;
+        cout << "[PROCESSO] Iniciado: " << VolumeLitros
+             << " L a " << TempDesejada << "C" << endl;
+    }
+
+    bool isProcessoAtivo()      const { return ProcessoAtivo; }
+    double getVolumeSolicitado() const { return VolumeSolicitado; }
+
+    void setVolumeSolicitado(double v) { VolumeSolicitado = v; }
+    void setProcessoAtivo(bool v)      { ProcessoAtivo = v; }
+
+
 };
 
 // Essa aqui é a classe Pai - 'contrato' que as regras devem seguir 
@@ -1420,20 +1461,27 @@ class RegraControle{
 class RegraControleTemperatura : public RegraControle {
     public:
     void aplicar(PlantaMistura& planta) override {
-        double temp     = planta.getTemperaturaMistura();
-        double setpoint = planta.getSetpointTemperatura();
-        double tolerancia = 1.0;
+    // Não atua se não há processo ativo e o tanque já está sendo mantido
+    // pela RegraControleProcesso
+    if (!planta.isProcessoAtivo()) return;
 
-        if (temp < setpoint - tolerancia) {
-            // Temperatura baixa: abre mais quente, reduz fria
-            planta.aumentarAguaQuente();
-            planta.reduzirAguaFria();
-        } else if (temp > setpoint + tolerancia) {
-            // Temperatura alta: abre mais fria, reduz quente
-            planta.aumentarAguaFria();
-            planta.reduzirAguaQuente();
-        }
+    double temp      = planta.getTemperaturaMistura();
+    double setpoint  = planta.getSetpointTemperatura();
+    double tolerancia = 1.0;
+
+    if (temp < setpoint - tolerancia) {
+        planta.aumentarAguaQuente();
+        planta.reduzirAguaFria();
+    } else if (temp > setpoint + tolerancia) {
+        planta.aumentarAguaFria();
+        planta.reduzirAguaQuente();
     }
+
+    if (planta.getAberturaValvulaQuente() > 0)
+        planta.getBombasQuente().Ligar(50.0);
+    if (planta.getAberturaValvulaFria() > 0)
+        planta.getBombasFria().Ligar(50.0);
+}
 };
 
 class RegraNivelAlto : public RegraControle {
@@ -1481,6 +1529,56 @@ class RegraFalhaReservatorio : public RegraControle {
         }
         if (planta.getTempReservatorioF() > 30.0) {
             planta.adicionarAlarme("FALHA_SERPENTINA_FRIA: temperatura alta no reservatorio frio");
+        }
+    }
+};
+
+// Regra extra da dupla EB-61
+// Controla a saída do tanque baseado no pedido do operador
+class RegraControleProcesso : public RegraControle {
+    private:
+    double VolumeEntregue;
+
+    public:
+    RegraControleProcesso() : VolumeEntregue(0.0) {}
+
+    void aplicar(PlantaMistura& planta) override {
+
+        if (!planta.isProcessoAtivo()) {
+            // Sem processo: mantém nível entre 40 e 60%
+            if (planta.getNivelTanque() < 40.0) {
+                planta.getBombasQuente().Ligar(30.0);
+                planta.getBombasFria().Ligar(30.0);
+            }
+            if (planta.getNivelTanque() >= 60.0) {
+                planta.getBombasQuente().Desligar();
+                planta.getBombasFria().Desligar();
+            }
+            planta.desligarBombaSaida();
+            VolumeEntregue = 0.0;
+            return;
+        }
+
+        // Processo ativo: acumula volume entregue
+        // 1% de nível = ~10 litros por ciclo
+        VolumeEntregue += 10.0;
+
+        if (VolumeEntregue >= planta.getVolumeSolicitado()) {
+            planta.desligarBombaSaida();
+            planta.fecharEntradas();
+            planta.setProcessoAtivo(false);
+            VolumeEntregue = 0.0;
+            cout << "[PROCESSO] Concluido. Volume entregue." << endl;
+            planta.adicionarAlarme("PROCESSO_CONCLUIDO");
+            return;
+        }
+
+        // Segurança: para se nível cair abaixo do limite
+        if (planta.getNivelTanque() <= planta.getLimiteBaixo()) {
+            planta.desligarBombaSaida();
+            planta.setProcessoAtivo(false);
+            VolumeEntregue = 0.0;
+            planta.adicionarAlarme("PROCESSO_INTERROMPIDO: nivel baixo");
         }
     }
 };
@@ -1575,6 +1673,11 @@ int main() {
     GeradorJSON json;
     GerenciadorComandos receptor("comandos.json");
     
+    // NOVO: reseta o arquivo de comandos para garantir estado limpo ao iniciar
+    ofstream resetComandos("comandos.json");
+    resetComandos << "{\n\"setpoint_temp\": 45.0,\n\"vazao_alvo\": 60.0,\n\"override_bomba_q\": false,\n\"override_bomba_f\": false,\n\"parada_emergencia\": false,\n\"operador_ativo\": \"sistema\"\n}" << endl;
+    resetComandos.close();
+
     string nome, senha;
     cout << "=== LOGIN ===" << endl;
     cout << "Usuario: "; cin >> nome;
@@ -1621,11 +1724,13 @@ int main() {
     RegraNivelBaixo          regraNivelBaixo;
     RegraPressaoAlta         regraPressaoAlta;
     RegraControleTemperatura regraTemperatura;
+    RegraControleProcesso regraProcesso;
 
     // Vetor de regras: o loop aplica todas em ordem a cada ciclo
     vector<RegraControle*> regras = {
         &regraFalha,
         &regraNivelAlto,
+        &regraProcesso,
         &regraNivelBaixo,
         &regraPressaoAlta,
         &regraTemperatura
@@ -1638,6 +1743,7 @@ int main() {
     cout << "Comandos:" << endl;
     cout << "  [ENTER] = avancar ciclo" << endl;
     cout << "  s       = alterar setpoint" << endl;
+    cout << "  o       = solicitar volume do processo (operador)" << endl;
     cout << "  m       = propor manutencao (tecnico)" << endl;
     cout << "  a       = aprovar manutencao (admin)" << endl;
     cout << "  r       = recusar manutencao (admin)" << endl;
@@ -1706,12 +1812,119 @@ int main() {
 
         //Dispara a função que lê o arquivo. Se o admin apertou algo no site, o receptor vai atualizar os valores dentro dele.
         receptor.atualizarComandos();
+
+        if (receptor.getResetarAlarmes()) {
+            planta.resetarAlarmes();
+            cout << "[COMANDO] Alarmes resetados pelo supervisório." << endl;
+        }
+
+       
         //extrai as ordens vindas do arquivo JSON enviado pelo servidor web
         bool emergencia = receptor.getParadaEmergencia(); 
         double setpoint = receptor.getSetpointTemp();     
 
         //Aplica as ordens do site (temperatura e overrides das bombas) diretamente na planta
         planta.receberComandosSupervisorio(setpoint, emergencia, receptor.getOverrideBombaQ(), receptor.getOverrideBombaF());
+
+// Lê comandos de manutenção vindos do Streamlit
+        ifstream arquivoMan("manutencao.json");
+        if (arquivoMan.is_open()) {
+            string conteudo, linha;
+            while (getline(arquivoMan, linha)) conteudo += linha;
+            arquivoMan.close();
+
+            auto extrair = [&](string chave) {
+                size_t p = conteudo.find("\"" + chave + "\"");
+                if (p == string::npos) return string("");
+                p = conteudo.find(":", p) + 1;
+                p = conteudo.find("\"", p) + 1;
+                size_t fim = conteudo.find("\"", p);
+                return conteudo.substr(p, fim - p);
+            };
+
+            if (conteudo.find("\"PROPOR\"") != string::npos) {
+                string eq  = extrair("equipamento");
+                string mot = extrair("motivo");
+                string dat = extrair("data");
+                if (!eq.empty() && !mot.empty()) {
+                    try {
+                        gerManutencao.proporManutencao(eq, mot, dat, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+
+            } else if (conteudo.find("\"APROVAR\"") != string::npos) {
+                string eq = extrair("equipamento");
+                if (!eq.empty()) {
+                    try {
+                        gerManutencao.aprovarManutencao(eq, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+
+            } else if (conteudo.find("\"RECUSAR\"") != string::npos) {
+                string eq  = extrair("equipamento");
+                string rec = extrair("motivo_recusa");
+                if (!eq.empty()) {
+                    try {
+                        gerManutencao.recusarManutencao(eq, rec, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+            }
+        } // fecha if arquivoMan.is_open()
+
+        // Lê pedido de processo vindo do Streamlit
+        ifstream arquivoProc("processo.json");
+        if (arquivoProc.is_open()) {
+            string conteudo, linha;
+            while (getline(arquivoProc, linha)) conteudo += linha;
+            arquivoProc.close();
+
+            double tempProc = 0.0;
+            double volProc  = 0.0;
+
+            // extrai temperatura
+            size_t pt = conteudo.find("\"temperatura\"");
+            if (pt != string::npos) {
+                pt = conteudo.find(":", pt) + 1;
+                string val = conteudo.substr(pt, conteudo.find(",", pt) - pt);
+                string valLimpo = "";
+                for (char c : val) if (c != ' ' && c != '\n' && c != '\r') valLimpo += c;
+                val = valLimpo;
+                try { tempProc = stod(val); } catch (...) {}
+            }
+
+            // extrai volume
+            size_t pv = conteudo.find("\"volume\"");
+            if (pv != string::npos) {
+                pv = conteudo.find(":", pv) + 1;
+                string val = conteudo.substr(pv, conteudo.find(",", pv) - pv);
+                string valLimpo = "";
+                for (char c : val) if (c != ' ' && c != '\n' && c != '\r') valLimpo += c;
+                val = valLimpo;
+                try { volProc = stod(val); } catch (...) {}
+            }
+
+            if (tempProc > 0 && volProc > 0) {
+                ComandoAlterarSetPoint cmd_sp(tempProc, 60.0);
+                cmd_sp.executar(planta);
+                planta.solicitarProcesso(tempProc, volProc);
+                registro.registrarAcaoOperador(
+                    acesso.getNomeAtivo(),
+                    "Processo via supervisório: " + to_string(tempProc) +
+                    "C | " + to_string(volProc) + " L");
+                cout << "[PROCESSO] Lido do Streamlit: " << tempProc
+                    << "C | " << volProc << " L" << endl;
+            }
+            remove("processo.json");
+        } // fecha if arquivoProc.is_open()
 
         if (emergencia) {
             std::cout << "ALARME DE EMERGENCIA ATIVADO! Desligando processo." << std::endl;
@@ -1786,6 +1999,20 @@ int main() {
             if (op == "1") planta.simularFalhaSerpentinaQuente();
             else           planta.simularFalhaSerpentinaFria();
 
+        } else if (cmd == "o") {
+            double tempPedido, volPedido;
+            cout << "Temperatura desejada: "; cin >> tempPedido;
+            cout << "Volume desejado (L):   "; cin >> volPedido;
+
+            ComandoAlterarSetPoint cmd_sp(tempPedido, volPedido);
+            cmd_sp.executar(planta);
+            planta.solicitarProcesso(tempPedido, volPedido);
+
+            registro.registrarAcaoOperador(
+            acesso.getNomeAtivo(),
+            "Solicitou processo: " + to_string(tempPedido) +
+            "C | " + to_string(volPedido) + " L");
+        
         } else if (cmd == "m") {
             try {
                 string equip, motivo, data;

@@ -1,8 +1,9 @@
 {
-    "setpoint_temp": 35.5,
-    "vazao_alvo": 50.0,
+    "setpoint_temp": 53.5,
+    "vazao_alvo": 60.0,
     "override_bomba_q": false,
     "override_bomba_f": false,
     "parada_emergencia": false,
-    "operador_ativo": "Operador"
+    "resetar_alarmes": false,
+    "operador_ativo": "Administrador"
 }
