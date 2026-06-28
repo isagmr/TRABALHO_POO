@@ -228,7 +228,7 @@ class GeradorJSON {
 
     //escreve uma leitura do sensor no arquivo
     void escreverLeitura(string tag, string variavel, double valor, string unidade, string status, int ciclo) {
-    Arquivo << "{" << "\"sensor\":\"" << tag << "\"," << "\"valor\":" << valor << "," << "\"unidade\":\"" << unidade << "\"," << "\"status\":\"" << status << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;    }
+    Arquivo << "{" << "\"tipo\":\"leitura\"," << "\"sensor\":\"" << tag << "\"," << "\"valor\":" << valor << "," << "\"unidade\":\"" << unidade << "\"," << "\"status\":\"" << status << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;    }
 
     // Escreve o estado de um atuador (bomba ou válvula)
     void escreverAtuador(string nome, string estado, double valor, int ciclo) {
@@ -697,6 +697,9 @@ class ParBombas{
                 UsandoReserva = true;
             }
             Reserva.Ligar(Potencia);
+        } else {
+            UsandoReserva = false;
+            Principal.Ligar(Potencia);
         }
     }
 

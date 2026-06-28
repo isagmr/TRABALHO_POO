@@ -1,223 +1,441 @@
-import streamlit as st  
-import pandas as pd     
-import os               
-import time 
-import json 
+import streamlit as st
+import pandas as pd
+import os
+import time
+import json
 from datetime import datetime
 
-# CONFIGURAÇÃO INICIAL
-st.set_page_config(page_title="SUPERVISÓRIO BOMBEAMENTO", layout="wide")
+st.set_page_config(
+    page_title="Mini-SCADA EB-61",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-ARQUIVO_LEITURAS = 'leituras.json' 
-ARQUIVO_COMANDOS = 'comandos.json' 
+ARQUIVO_LEITURAS = 'leituras.json'
+ARQUIVO_COMANDOS = 'comandos.json'
+CSV_HISTORICO    = 'historico.csv'
 
+st.markdown("""
+<style>
+    body, .main, .block-container {
+        background-color: #1a1a2e !important;
+        color: #e0e0e0 !important;
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.5rem !important;
+    }
+    .block-container { padding: 0.5rem 1rem !important; max-width: 100% !important; }
+    h1, h2, h3 { color: #00d4ff !important; margin: 0 !important; padding: 0 !important; }
+    .stMetric {
+        background-color: #16213e;
+        border: 1px solid #0f3460;
+        border-radius: 6px;
+        padding: 6px !important;
+    }
+    .stMetric label { color: #aaaaaa !important; font-size: 0.75rem !important; }
+    .stMetric [data-testid="stMetricValue"] { color: #00ff88 !important; font-size: 1.1rem !important; font-family: monospace; }
+    .card-ok {
+        background-color: #0a2a1a;
+        border: 1px solid #00aa44;
+        border-radius: 6px;
+        padding: 8px;
+        text-align: center;
+        color: #00ff88;
+        font-family: monospace;
+        font-size: 0.85rem;
+    }
+    .card-alarme {
+        background-color: #2a0a0a;
+        border: 2px solid #ff4444;
+        border-radius: 6px;
+        padding: 8px;
+        text-align: center;
+        color: #ff4444;
+        font-family: monospace;
+        font-size: 0.85rem;
+        animation: pisca 1s infinite;
+    }
+    .card-atencao {
+        background-color: #2a1a00;
+        border: 1px solid #ffaa00;
+        border-radius: 6px;
+        padding: 8px;
+        text-align: center;
+        color: #ffaa00;
+        font-family: monospace;
+        font-size: 0.85rem;
+    }
+    @keyframes pisca { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+    .secao-titulo {
+        background-color: #0f3460;
+        color: #00d4ff;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: bold;
+        letter-spacing: 1px;
+        margin-bottom: 4px;
+    }
+    .alarme-linha {
+        background-color: #2a0a0a;
+        border-left: 4px solid #ff4444;
+        color: #ff8888;
+        padding: 3px 8px;
+        margin: 2px 0;
+        font-family: monospace;
+        font-size: 0.8rem;
+        border-radius: 0 4px 4px 0;
+    }
+    .normal-linha {
+        background-color: #0a2a1a;
+        border-left: 4px solid #00aa44;
+        color: #00ff88;
+        padding: 3px 8px;
+        font-family: monospace;
+        font-size: 0.8rem;
+        border-radius: 0 4px 4px 0;
+    }
+    div[data-testid="stButton"] button {
+        background-color: #0f3460;
+        color: #00d4ff;
+        border: 1px solid #00d4ff;
+        font-size: 0.8rem;
+        padding: 4px 12px;
+    }
+    .stSlider { padding: 0 !important; }
+    hr { border-color: #0f3460 !important; margin: 4px 0 !important; }
+    .header-bar {
+        background: linear-gradient(90deg, #0f3460, #16213e);
+        border-bottom: 2px solid #00d4ff;
+        padding: 6px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        border-radius: 4px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# ESTADO DE SESSÃO
+# ============================================================
 if 'logado' not in st.session_state:
-    st.session_state.logado = False
-    st.session_state.perfil = None  
-    st.session_state.usuario = ""
-
+    st.session_state.logado   = False
+    st.session_state.perfil   = None
+    st.session_state.usuario  = ""
 if 'historico_comandos' not in st.session_state:
     st.session_state.historico_comandos = []
 
-# ==========================================================================
-# 1. TELA DE LOGIN (Controle de Acesso)
-# ==========================================================================
+# ============================================================
+# LOGIN
+# ============================================================
 if not st.session_state.logado:
-    st.title("🔒 Sistema de Supervisão - Autenticação Requerida")
-    with st.form("tela_de_login"):
-        user_input = st.text_input("Usuário")
-        password_input = st.text_input("Senha", type="password")
-        botao_entrar = st.form_submit_button("Entrar no Sistema")
-        
-        if botao_entrar:
-            if user_input == "admin" and password_input == "admin123":
-                st.session_state.logado, st.session_state.perfil, st.session_state.usuario = True, "admin", "Administrador"
-                st.rerun()
-            elif user_input == "operador" and password_input == "op123":
-                st.session_state.logado, st.session_state.perfil, st.session_state.usuario = True, "operador", "Operador de Sala"
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos!")
+    st.markdown("""
+    <div style='text-align:center; padding: 60px 0 20px 0;'>
+        <h1 style='color:#00d4ff; font-size:2rem;'>🏭 Mini-SCADA — Planta de Mistura</h1>
+        <p style='color:#aaa;'>Estação EB-61 | Sistema de Supervisão e Controle</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_login = st.columns([1, 2, 1])[1]
+    with col_login:
+        with st.form("login"):
+            st.markdown("#### Autenticação Requerida")
+            usuario  = st.text_input("Usuário")
+            senha    = st.text_input("Senha", type="password")
+            entrar   = st.form_submit_button("Entrar", use_container_width=True)
+            if entrar:
+                credenciais = {
+                    "admin":    ("admin123",  "admin",    "Administrador"),
+                    "tecnico":  ("tec456",    "tecnico",  "Técnico"),
+                    "operador": ("op789",     "operador", "Operador"),
+                }
+                if usuario in credenciais and senha == credenciais[usuario][0]:
+                    st.session_state.logado  = True
+                    st.session_state.perfil  = credenciais[usuario][1]
+                    st.session_state.usuario = credenciais[usuario][2]
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
     st.stop()
 
-# ==========================================================================
-# 2. CABEÇALHO DO PAINEL
-# ==========================================================================
-col_tit, col_user = st.columns([4, 1])
-with col_tit: st.title("🏭 Supervisório Industrial - Misturador")
-with col_user:
-    st.write(f"👤 **Usuário:** {st.session_state.usuario} ({st.session_state.perfil.upper()})")
-    if st.button("🚪 Sair (Logout)"):
-        st.session_state.logado = False
-        st.rerun()
-
-st.markdown("---")
-
-# ==========================================================================
-# 3. LEITURA E TRATAMENTO DE DADOS (CORRIGIDO)
-# ==========================================================================
+# ============================================================
+# LEITURA DO JSON
+# ============================================================
 df_geral = pd.DataFrame()
-erro_leitura = False
-mensagem_erro = ""
+erro_msg = ""
 
 try:
     if os.path.exists(ARQUIVO_LEITURAS):
         df_geral = pd.read_json(ARQUIVO_LEITURAS, lines=True)
-        
-        # NOVA LÓGICA DE FALHA: Checa apenas se o carimbo de tempo (timestamp) está corrompido,
-        # pois campos vazios entre atuadores e sensores são normais na sua estrutura.
         if 'timestamp' in df_geral.columns:
-            linhas_corrompidas = df_geral['timestamp'].isnull()
-            if linhas_corrompidas.any():
-                st.warning("⚠️ Aviso: Foram detectadas leituras sem carimbo de tempo (Leitura Inválida). O sistema descartou as falhas.")
-                # Remove apenas as linhas que realmente vieram quebradas do C++
-                df_geral = df_geral[~linhas_corrompidas] 
+            df_geral = df_geral[df_geral['timestamp'].notna()]
     else:
-        erro_leitura = True
-        mensagem_erro = "Arquivo 'leituras.json' não encontrado."
+        erro_msg = "leituras.json não encontrado. O C++ está rodando?"
 except Exception as e:
-    erro_leitura = True
-    mensagem_erro = f"Falha crítica na comunicação com o arquivo JSON: {e}"
+    erro_msg = f"Erro ao ler JSON: {e}"
 
-# ==========================================================================
-# 4. EXIBIÇÃO DO SUPERVISÓRIO
-# ==========================================================================
-if not erro_leitura and not df_geral.empty:
-    
-    # Prepara os dados isolando apenas quem é sensor para desenhar os gráficos
+# Salva CSV
+if not df_geral.empty:
+    try:
+        if os.path.exists(CSV_HISTORICO):
+            df_hist = pd.concat([pd.read_csv(CSV_HISTORICO), df_geral]).drop_duplicates()
+        else:
+            df_hist = df_geral
+        df_hist.to_csv(CSV_HISTORICO, index=False)
+    except:
+        pass
+
+# ============================================================
+# PREPARA DADOS
+# ============================================================
+df_pivot     = pd.DataFrame()
+df_atuadores = pd.DataFrame()
+df_alarmes   = pd.DataFrame()
+
+if not df_geral.empty:
     df_sensores = df_geral[df_geral['sensor'].notna()].copy()
-    df_sensores['timestamp'] = pd.to_datetime(df_sensores['timestamp'])
-    df_grafico = df_sensores.pivot_table(index='timestamp', columns='sensor', values='valor', aggfunc='last')
+    if not df_sensores.empty:
+        df_sensores['timestamp'] = pd.to_datetime(df_sensores['timestamp'])
+        df_pivot = df_sensores.pivot_table(
+            index='timestamp', columns='sensor', values='valor', aggfunc='last'
+        )
+    df_atuadores = df_geral[df_geral['tipo'] == 'atuador'].copy()
+    df_alarmes   = df_geral[df_geral['tipo'] == 'alarme'].copy()
 
-    # --- MÉTRICAS PRINCIPAIS ---
-    col1, col2, col3, col4, col5 = st.columns(5)
-    def get_last(nome):
-        if nome in df_grafico.columns: return round(float(df_grafico[nome].dropna().iloc[-1]), 2)
-        return "---"
+def ultimo(sensor, decimais=1):
+    if not df_pivot.empty and sensor in df_pivot.columns:
+        s = df_pivot[sensor].dropna()
+        if not s.empty:
+            return round(float(s.iloc[-1]), decimais)
+    return None
 
-    val_mix_tt = get_last('TQ-MIX-TT')
-    val_mix_lt = get_last('TQ-MIX-LT')
+def fmt(val, unidade="", decimais=1):
+    if val is None: return "---"
+    return f"{val:.{decimais}f} {unidade}".strip()
 
-    with col1: st.metric("Resistência Quente", f"{get_last('RES-Q-TT')} °C")
-    with col2: st.metric("Resfriador Frio", f"{get_last('RES-F-TT')} °C")
-    with col3: st.metric("Tanque Misturador", f"{val_mix_tt} °C")
-    with col4: st.metric("Nível do Tanque", f"{val_mix_lt} %")
-    with col5: st.metric("Pressão Interna", f"{get_last('TQ-MIX-PT')} bar")
+temp_mix = ultimo('TQ-MIX-TT')
+nivel    = ultimo('TQ-MIX-LT')
+pressao  = ultimo('TQ-MIX-PT')
+temp_q   = ultimo('RES-Q-TT')
+temp_f   = ultimo('RES-F-TT')
 
-    # --- Tabela de leituras atuais e Histórico Consultável ---
-    with st.expander("📋 Ver Tabela de Leituras Atuais (Dados Brutos)"):
-        st.dataframe(df_geral.tail(20)) 
+def card(titulo, valor, unidade, ok_min=None, ok_max=None):
+    if valor is None:
+        classe = "card-atencao"
+        display = "---"
+    else:
+        fora = (ok_min is not None and valor < ok_min) or \
+               (ok_max is not None and valor > ok_max)
+        classe = "card-alarme" if fora else "card-ok"
+        display = fmt(valor, unidade)
+    return f"""<div class='{classe}'>
+        <div style='font-size:0.7rem;color:#aaa;'>{titulo}</div>
+        <div style='font-size:1.1rem;font-weight:bold;'>{display}</div>
+    </div>"""
 
-    # --- Gráfico histórico de pelo menos duas variáveis ---
-    col_chart1, col_chart2 = st.columns(2)
-    with col_chart1:
-        st.subheader("📈 Temperaturas (°C)")
-        temps = [c for c in ['RES-Q-TT', 'RES-F-TT', 'TQ-MIX-TT'] if c in df_grafico.columns]
-        if temps: st.line_chart(df_grafico[temps])
-    with col_chart2:
-        st.subheader("📊 Nível e Pressão")
-        outros = [c for c in ['TQ-MIX-LT', 'TQ-MIX-PT'] if c in df_grafico.columns]
-        if outros: st.line_chart(df_grafico[outros])
+def info_bomba(nome):
+    if not df_atuadores.empty:
+        f = df_atuadores[df_atuadores['nome'] == nome]
+        if not f.empty:
+            return f.iloc[-1].get('estado','---'), f.iloc[-1].get('valor', 0)
+    return "---", 0
 
-    # --- Resumo do estado das bombas ou atuadores ---
-    st.markdown("---")
-    st.subheader("🔌 Estado dos Atuadores")
-    c_bq, c_bf = st.columns(2)
-    df_atuadores = df_geral[df_geral['tipo'] == 'atuador']
-    
-    def get_bomba(nome):
-        filtro = df_atuadores[df_atuadores['nome'] == nome]
-        if not filtro.empty: return filtro.iloc[-1]['estado'], filtro.iloc[-1]['valor']
-        return "Desconectado", 0
+est_q, vaz_q = info_bomba('BOMBA-Q')
+est_f, vaz_f = info_bomba('BOMBA-F')
 
-    est_q, pot_q = get_bomba('BOMBA-Q')
-    est_f, pot_f = get_bomba('BOMBA-F')
+# Detecta alarmes
+alarmes_ativos = []
+if temp_mix is not None and temp_mix > 46.0: alarmes_ativos.append("TEMP MISTURA ACIMA DO SETPOINT")
+if temp_mix is not None and temp_mix < 44.0: alarmes_ativos.append("TEMP MISTURA ABAIXO DO SETPOINT")
+if nivel    is not None and nivel    >= 82.5: alarmes_ativos.append("NIVEL ALTO NO TANQUE")
+if nivel    is not None and nivel    <= 27.5: alarmes_ativos.append("NIVEL BAIXO NO TANQUE")
+if pressao  is not None and pressao  >= 6.5:  alarmes_ativos.append("PRESSAO ALTA NA SAIDA")
+if temp_q   is not None and temp_q   < 55.0:  alarmes_ativos.append("FALHA SERPENTINA QUENTE")
+if temp_f   is not None and temp_f   > 30.0:  alarmes_ativos.append("FALHA SERPENTINA FRIA")
+if not df_alarmes.empty:
+    for _, row in df_alarmes.tail(3).iterrows():
+        cod = str(row.get('codigo',''))
+        if cod and cod not in alarmes_ativos:
+            alarmes_ativos.append(f"[C++] {cod}")
 
-    with c_bq: st.info(f"**Bomba Quente (Q)** | Status: {est_q} | Carga: {pot_q}%")
-    with c_bf: st.info(f"**Bomba Fria (F)** | Status: {est_f} | Carga: {pot_f}%")
+# ============================================================
+# CABEÇALHO
+# ============================================================
+agora = datetime.now().strftime("%d/%m/%Y  %H:%M:%S")
+perfil_txt = st.session_state.perfil.upper()
+usuario_txt = st.session_state.usuario
 
-    # ==========================================================================
-    # 5. PAINEL DE COMANDOS (Envio para C++)
-    # ==========================================================================
-    st.markdown("---")
-    st.subheader("🎛️ Painel de Operação")
-    eh_operador = (st.session_state.perfil == "operador")
+st.markdown(f"""
+<div class='header-bar'>
+    <div>
+        <span style='color:#00d4ff;font-size:1.1rem;font-weight:bold;'>
+            🏭 Mini-SCADA — Planta de Mistura &nbsp;|&nbsp;
+            <span style='color:#ffaa00;'>EB-61</span>
+        </span>
+    </div>
+    <div style='color:#aaa;font-size:0.85rem;font-family:monospace;'>
+        🕐 {agora} &nbsp;&nbsp; 👤 {usuario_txt} [{perfil_txt}]
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-    def enviar_comando(setpoint, vazao, manual_q, manual_f, estop, nome_acao):
-        dados_comando = {
-            "setpoint_temp": float(setpoint), "vazao_alvo": float(vazao),
-            "override_bomba_q": bool(manual_q), "override_bomba_f": bool(manual_f),
-            "parada_emergencia": bool(estop), "operador_ativo": st.session_state.usuario
+if st.session_state.get('mostrar_sair'):
+    if st.button("Confirmar Logout"):
+        st.session_state.logado = False
+        st.rerun()
+
+# ============================================================
+# LINHA 1: RESERVATÓRIOS | TANQUE | BOMBAS
+# ============================================================
+col_res, col_tanque, col_bombas = st.columns([2, 3, 2])
+
+with col_res:
+    st.markdown("<div class='secao-titulo'>⚗️ RESERVATÓRIOS</div>", unsafe_allow_html=True)
+    st.markdown(card("RES-Q-TT  Temp. Quente", temp_q, "°C", 55.0, 75.0), unsafe_allow_html=True)
+    st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+    st.markdown(card("RES-F-TT  Temp. Fria",   temp_f, "°C", 10.0, 30.0), unsafe_allow_html=True)
+    st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+    serp_q = "🟢 NORMAL" if temp_q and temp_q >= 55.0 else "🔴 FALHA"
+    serp_f = "🟢 NORMAL" if temp_f and temp_f <= 30.0 else "🔴 FALHA"
+    st.markdown(f"""
+    <div style='background:#16213e;border:1px solid #0f3460;border-radius:6px;padding:6px;font-size:0.75rem;font-family:monospace;'>
+        <div>🔥 Serpentina Quente: <b>{serp_q}</b></div>
+        <div>❄️ Serpentina Fria: &nbsp;&nbsp;<b>{serp_f}</b></div>
+    </div>""", unsafe_allow_html=True)
+
+with col_tanque:
+    st.markdown("<div class='secao-titulo'>🏺 TANQUE DE MISTURA — TQ-MIX</div>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(card("TQ-MIX-TT  Temperatura", temp_mix, "°C", 44.0, 46.0), unsafe_allow_html=True)
+    with c2: st.markdown(card("TQ-MIX-LT  Nível",       nivel,    "%",  27.5, 82.5), unsafe_allow_html=True)
+    with c3: st.markdown(card("TQ-MIX-PT  Pressão",     pressao,  "BAR",None, 6.5),  unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:6px'></div>", unsafe_allow_html=True)
+
+    # Barra visual de nível
+    nivel_val = nivel if nivel is not None else 0
+    cor_nivel = "#ff4444" if nivel_val >= 82.5 or nivel_val <= 27.5 else "#00ff88"
+    st.markdown(f"""
+    <div style='background:#0f1923;border:1px solid #0f3460;border-radius:4px;padding:4px 8px;'>
+        <div style='font-size:0.7rem;color:#aaa;margin-bottom:2px;'>NÍVEL VISUAL</div>
+        <div style='background:#111;border-radius:4px;height:14px;'>
+            <div style='background:{cor_nivel};width:{nivel_val}%;height:14px;border-radius:4px;'></div>
+        </div>
+        <div style='display:flex;justify-content:space-between;font-size:0.65rem;color:#555;'>
+            <span>0%</span><span>▲27.5%</span><span>50%</span><span>▲82.5%</span><span>100%</span>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+
+    # Mini gráfico de temperatura
+    if not df_pivot.empty:
+        colunas = [c for c in ['TQ-MIX-TT','RES-Q-TT','RES-F-TT'] if c in df_pivot.columns]
+        if colunas:
+            st.markdown("<div style='font-size:0.7rem;color:#aaa;'>📈 Histórico Temperaturas</div>", unsafe_allow_html=True)
+            st.line_chart(df_pivot[colunas].tail(30), height=100, use_container_width=True)
+
+with col_bombas:
+    st.markdown("<div class='secao-titulo'>⚙️ BOMBAS E VÁLVULAS</div>", unsafe_allow_html=True)
+    cor_bq = "card-ok" if est_q in ["PRINCIPAL","RESERVA"] else "card-atencao"
+    cor_bf = "card-ok" if est_f in ["PRINCIPAL","RESERVA"] else "card-atencao"
+    st.markdown(f"""
+    <div class='{cor_bq}'>
+        <div style='font-size:0.7rem;color:#aaa;'>BOMBA-Q1/Q2 (Linha Quente)</div>
+        <div>Status: <b>{est_q}</b> | {fmt(vaz_q,'L/min',1)}</div>
+    </div>""", unsafe_allow_html=True)
+    st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class='{cor_bf}'>
+        <div style='font-size:0.7rem;color:#aaa;'>BOMBA-F1/F2 (Linha Fria)</div>
+        <div>Status: <b>{est_f}</b> | {fmt(vaz_f,'L/min',1)}</div>
+    </div>""", unsafe_allow_html=True)
+    st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+
+    # Mini gráfico nível
+    if not df_pivot.empty and 'TQ-MIX-LT' in df_pivot.columns:
+        st.markdown("<div style='font-size:0.7rem;color:#aaa;'>📊 Histórico Nível</div>", unsafe_allow_html=True)
+        st.line_chart(df_pivot[['TQ-MIX-LT']].tail(30), height=80, use_container_width=True)
+
+# ============================================================
+# LINHA 2: COMANDOS | ALARMES
+# ============================================================
+st.markdown("<hr>", unsafe_allow_html=True)
+col_cmd, col_alarm = st.columns([3, 2])
+
+with col_cmd:
+    st.markdown("<div class='secao-titulo'>🎛️ PAINEL DE COMANDOS</div>", unsafe_allow_html=True)
+    eh_operador = st.session_state.perfil == "operador"
+    eh_admin    = st.session_state.perfil == "admin"
+
+    def enviar_comando(setpoint, vazao, mq, mf, estop, desc):
+        dados = {
+            "setpoint_temp":    float(setpoint),
+            "vazao_alvo":       float(vazao),
+            "override_bomba_q": bool(mq),
+            "override_bomba_f": bool(mf),
+            "parada_emergencia":bool(estop),
+            "operador_ativo":   st.session_state.usuario
         }
         with open(ARQUIVO_COMANDOS, 'w') as f:
-            json.dump(dados_comando, f, indent=4)
-        
-        hora_atual = datetime.now().strftime("%H:%M:%S")
-        log = f"[{hora_atual}] {st.session_state.usuario}: {nome_acao}"
-        st.session_state.historico_comandos.insert(0, log) 
+            json.dump(dados, f, indent=4)
+        hora = datetime.now().strftime("%H:%M:%S")
+        st.session_state.historico_comandos.insert(
+            0, f"[{hora}] {st.session_state.usuario}: {desc}"
+        )
 
-    col_cmd1, col_cmd2, col_cmd3 = st.columns(3)
-    
-    with col_cmd1:
-        with st.form("form_processo"):
-            st.write("**Parâmetros de Processo**")
-            setpoint_alvo = st.slider("Setpoint (°C)", 0.0, 100.0, 50.0, disabled=eh_operador)
-            vazao_alvo = st.number_input("Vazão (L/min)", 0.0, 10.0, 2.0, disabled=eh_operador)
-            if st.form_submit_button("Aplicar", disabled=eh_operador):
-                enviar_comando(setpoint_alvo, vazao_alvo, False, False, False, f"Alterou Setpoint para {setpoint_alvo}°C")
-                st.success("Comando enviado!")
+    cc1, cc2, cc3 = st.columns([3, 2, 2])
 
-    with col_cmd2:
-        st.write("**Atuadores Manuais**")
-        bomba_q = st.toggle("Ligar Bomba Q", disabled=eh_operador)
-        bomba_f = st.toggle("Ligar Bomba F", disabled=eh_operador)
-        if (bomba_q or bomba_f) and not eh_operador:
-            enviar_comando(50.0, 2.0, bomba_q, bomba_f, False, "Acionamento manual de bomba(s)")
+    with cc1:
+        with st.form("form_sp"):
+            sp = st.slider("Setpoint Temperatura (°C)", 21.0, 69.0, 45.0, step=0.5)
+            vz = st.number_input("Volume (L/min)", 10.0, 100.0, 60.0, step=5.0)
+            if st.form_submit_button("✅ Aplicar Setpoint", use_container_width=True):
+                enviar_comando(sp, vz, False, False, False, f"Setpoint → {sp}°C | {vz} L/min")
+                st.success("Enviado!")
 
-    with col_cmd3:
-        st.write("**Emergência**")
-        if st.button("🛑 PARADA DE EMERGÊNCIA", type="primary", use_container_width=True, disabled=eh_operador):
-            enviar_comando(0.0, 0.0, False, False, True, "ACIONOU PARADA DE EMERGÊNCIA")
+    with cc2:
+        st.markdown("<div style='font-size:0.75rem;color:#aaa;'>Atuadores Manuais</div>", unsafe_allow_html=True)
+        mq = st.toggle("Bomba Quente", disabled=eh_operador)
+        mf = st.toggle("Bomba Fria",   disabled=eh_operador)
+        if st.button("Aplicar", disabled=eh_operador, use_container_width=True):
+            enviar_comando(45.0, 60.0, mq, mf, False, f"Manual: BQ={mq} BF={mf}")
+            st.success("Enviado!")
+
+    with cc3:
+        st.markdown("<div style='font-size:0.75rem;color:#aaa;'>Segurança</div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin:8px'></div>", unsafe_allow_html=True)
+        if st.button("🛑 EMERGÊNCIA", type="primary",
+                     use_container_width=True, disabled=not eh_admin):
+            enviar_comando(0.0, 0.0, False, False, True, "PARADA DE EMERGÊNCIA")
             st.error("Emergência acionada!")
+        st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.logado = False
+            st.rerun()
 
-    # ==========================================================================
-    # 6. LISTA DE ALARMES E HISTÓRICO DE COMANDOS
-    # ==========================================================================
-    st.markdown("---")
-    col_al, col_hist = st.columns(2)
-    
-    with col_al:
-        st.subheader("🚨 Lista de Alarmes")
-        alarmes_ativos = []
-        if isinstance(val_mix_tt, (int, float)) and val_mix_tt > 75.0:
-            alarmes_ativos.append("🔴 ALTA TEMPERATURA NO TANQUE MISTURADOR (>75°C)")
-        if isinstance(val_mix_lt, (int, float)) and val_mix_lt > 90.0:
-            alarmes_ativos.append("🔴 RISCO DE TRANSBORDAMENTO - Nível Alto (>90%)")
-            
-        if not alarmes_ativos:
-            st.success("✅ Nenhum alarme ativo. Sistema operando normalmente.")
-        else:
-            for alarme in alarmes_ativos:
-                st.error(alarme)
+with col_alarm:
+    st.markdown("<div class='secao-titulo'>🚨 ALARMES E HISTÓRICO</div>", unsafe_allow_html=True)
 
-    with col_hist:
-        st.subheader("📜 Histórico de Comandos")
-        if len(st.session_state.historico_comandos) == 0:
-            st.write("Nenhum comando enviado nesta sessão.")
-        else:
-            for cmd in st.session_state.historico_comandos[:5]:
-                st.caption(cmd)
-
-    time.sleep(5)
-    st.rerun()
-
-else:
-    # Ajustado para exibir o motivo real caso o arquivo esteja vazio ou falhe
-    if mensagem_erro:
-        st.error(f"🚨 FALHA CRÍTICA: {mensagem_erro}")
+    if alarmes_ativos:
+        for a in alarmes_ativos:
+            st.markdown(f"<div class='alarme-linha'>🔴 {a}</div>", unsafe_allow_html=True)
     else:
-        st.error("🚨 FALHA CRÍTICA: O arquivo de dados foi lido, mas a tabela está vazia. O C++ enviou algum dado?")
-        
-    st.warning("Verifique se o programa C++ está rodando e gerando o arquivo JSON corretamente.")
-    if st.button("Tentar Reconectar"):
-        st.rerun()
+        st.markdown("<div class='normal-linha'>✅ Sistema operando normalmente</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:6px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:0.7rem;color:#aaa;'>Últimos comandos:</div>", unsafe_allow_html=True)
+    if st.session_state.historico_comandos:
+        for cmd in st.session_state.historico_comandos[:5]:
+            st.markdown(f"<div style='font-size:0.72rem;color:#888;font-family:monospace;padding:1px 0;'>{cmd}</div>",
+                        unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='font-size:0.72rem;color:#555;'>Nenhum comando nesta sessão.</div>",
+                    unsafe_allow_html=True)
+
+# ============================================================
+# ATUALIZAÇÃO AUTOMÁTICA
+# ============================================================
+time.sleep(5)
+st.rerun()
