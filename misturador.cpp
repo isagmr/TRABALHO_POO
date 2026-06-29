@@ -1,0 +1,2051 @@
+// TRABALHO DE PROGRAMAÇÃO ORIENTADA A OBJETOS
+// Quando alguém quiser usar o líquido para um processo, e o tanque estiver no limite baixo, mesmo que a bomba de reabastecimento esteja aberta, precisa ter um alarme que dispara avisando ao usuário que ele não pode usar esse tanque até que ele atinja o nível baixo de segurança + nível que ele quer usar no processo
+// Ver as uilizações da biblioteca stdexcept (erros)
+// incluir sensor de temperatura
+// Separar os componentes em vários arquivos e pensar nas estratéias (situações possíveis que o programa vai decidir sozinho qual usar)
+
+
+#include <iostream>
+#include <string>
+#include <random> // Biblioteca para gerar números aleatórios (o Random Walk do código)
+#include <thread> // Biblioteca que deixa pausar a execução do programa
+#include <chrono> // Biblioteca para utilizar unidade de tempo
+#include <vector> // para listas de usuários e agendamentos de manutenções
+#include <stdexcept> // para lançar exceções de acesso negado
+#include <fstream> // salvar histórico em arquivo
+#include <ctime> //gerar o timestamp real de cada leitura (o timestamp amarra o dado fisico ao tempo real, pra que o operador saiba exatamente quando aconteceu o evento)
+
+using namespace std;
+//ID_DUPLA = 160 ou 25
+
+class GerenciadorComandos {
+// A seção 'private' garante o Encapsulamento. Nenhuma outra parte do código
+// consegue alterar essas variáveis diretamente, apenas através dos métodos da classe.
+private:
+    double setpoint_temp;      // Guarda a temperatura alvo desejada
+    double vazao_alvo;         // Guarda a vazão desejada do sistema
+    bool override_bomba_q;     // True se o admin ligar a bomba quente manualmente
+    bool override_bomba_f;     // True se o admin ligar a bomba fria manualmente
+    bool parada_emergencia;    // True se o botão de emergência for acionado
+    bool resetar_alarmes;
+    std::string nome_arquivo;  // Nome do arquivo que será lido (comandos.json)
+
+    // O Python manda o texto assim: "50.0", ou true, (com aspas ou vírgulas).
+    // Essa função remove esses caracteres inúteis para não quebrar a conversão matemática.
+    // O '&' significa que estamos alterando a variável original na memória (passagem por referência).
+    void limparTexto(std::string &valor) {
+        std::string limpo = "";
+        for (char c : valor) {
+            // Se o caractere não for vírgula, nem aspas duplas, nem espaço, nós o guardamos
+            if (c != ',' && c != '"' && c != ' ') {
+                limpo += c;
+            }
+        }
+        valor = limpo; // Substitui o texto sujo pelo texto limpo
+    }
+    public:
+    GerenciadorComandos(std::string arquivo = "comandos.json") {
+        nome_arquivo = arquivo;
+        setpoint_temp = 50.0;     // Temperatura segura de partida
+        vazao_alvo = 2.0;         // Vazão segura de partida
+        resetar_alarmes = false;
+        override_bomba_q = false; // Bombas iniciam em modo automático (desligado)
+        override_bomba_f = false; 
+        parada_emergencia = false;// O sistema inicia operante
+    }
+    // Método Principal: Deve ser chamado a cada ciclo do 'while' para ler as novidades
+    void atualizarComandos() {
+        // Cria o objeto 'arquivo' e tenta abrir o comandos.json
+        std::ifstream arquivo(nome_arquivo);
+        
+        // Proteção: Se o arquivo não existir (o site ainda não mandou nada),
+        // encerra a função silenciosamente e mantém os valores antigos.
+        if (!arquivo.is_open()) {
+            return; 
+        }
+
+        std::string linha;
+        
+        // O comando getline vai ler o arquivo de texto linha por linha até o fim
+        while (std::getline(arquivo, linha)) {
+            
+            // 1. VERIFICAÇÃO DO SETPOINT
+            // O std::string::npos significa "Não Encontrado" (No Position).
+            // Se a busca for DIFERENTE de não encontrado, significa que achamos a palavra!
+            if (linha.find("\"setpoint_temp\"") != std::string::npos) {
+                size_t pos = linha.find(":"); // Acha a posição do caractere dois pontos (:)
+                std::string valorStr = linha.substr(pos + 1); // Corta a linha pegando tudo após os ':'
+                limparTexto(valorStr); // Limpa aspas e vírgulas
+                setpoint_temp = std::stod(valorStr); // std::stod converte a String Para Double
+            }
+            // 2. VERIFICAÇÃO DA VAZÃO
+            else if (linha.find("\"vazao_alvo\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                vazao_alvo = std::stod(valorStr); // Converte para decimal
+            }
+            // 3. VERIFICAÇÃO DO COMANDO MANUAL DA BOMBA QUENTE
+            else if (linha.find("\"override_bomba_q\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                // Se a string contiver a palavra "true", a variável booleana vira verdadeira
+                override_bomba_q = (valorStr == "true"); 
+            }
+            // 4. VERIFICAÇÃO DO COMANDO MANUAL DA BOMBA FRIA
+            else if (linha.find("\"override_bomba_f\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                override_bomba_f = (valorStr == "true");
+            }
+            // 5. VERIFICAÇÃO DA PARADA DE EMERGÊNCIA
+            else if (linha.find("\"parada_emergencia\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                parada_emergencia = (valorStr == "true");
+            } else if (linha.find("\"resetar_alarmes\"") != std::string::npos) {
+                size_t pos = linha.find(":");
+                std::string valorStr = linha.substr(pos + 1);
+                limparTexto(valorStr);
+                resetar_alarmes = (valorStr == "true");
+            }
+        }
+        arquivo.close(); 
+    }
+
+    bool getResetarAlarmes() const { return resetar_alarmes; }
+    double getSetpointTemp() const    { return setpoint_temp; }
+    double getVazaoAlvo() const       { return vazao_alvo; }
+    bool getOverrideBombaQ() const    { return override_bomba_q; }
+    bool getOverrideBombaF() const    { return override_bomba_f; }
+    bool getParadaEmergencia() const  { return parada_emergencia; }
+};
+
+
+class RegistroSistema {
+    private:
+    ofstream ArquivoAlarmes;
+    ofstream ArquivoAcoes;
+    int CicloAtual;
+
+    public:
+    RegistroSistema() {
+        CicloAtual = 0;
+
+        ArquivoAlarmes.open("historico_alarmes.txt", ios::app); //ios::app significa que novas entradas são adicionadas ao fim do arquivo sem apagar oq já estava salvo
+        ArquivoAcoes.open("historico_acoes.txt", ios::app);
+
+        //para marcar uma nova sessão nos arquivos sempre que houver
+        ArquivoAlarmes << "\n=== NOVA SESSAO ===" << endl;
+        ArquivoAcoes << "\n=== NOVA SESSAO ===" << endl;
+    }
+
+    //destrutor da classe, garante que os arquivos serão fechados corretamente (segurança - não corromper)
+    ~RegistroSistema() {
+        ArquivoAlarmes.close();
+        ArquivoAcoes.close();
+    }
+
+    //variável recebe o numero do ciclo e está protegida por encapsulamento de modo que não da pra alterar ela pela main, ou seja
+    //o valor do ciclo segue o fluxo do processo
+    void setCiclo(int C) {
+        CicloAtual = C; 
+    }
+
+    //registra alarme no arquivo e exibe no terminal
+    //usando concatenação de strings (somando textos); o + faz uma 'fusão' de textos; a função to_string transforma o numero do ciclo em texto
+    void registrarAlarme(string Descricao){ //a descrição já é uma string q veio do parametro da função
+        string linha = "[CICLO " + to_string(CicloAtual) + "] ALARME: " + Descricao;
+        cout << linha << endl; //envia pro terminal
+        ArquivoAlarmes << linha << endl; //envia pro arquivo
+    }
+
+    //registra um alarme rconhecido: quem reconheceu fica salvo
+    void registrarReconhecimentoAlarme(string Alarme, string NomeUsuario) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] ALARME RECONHECIDO: " + Alarme + " | Por: " + NomeUsuario;
+        cout << linha << endl;
+        ArquivoAlarmes << linha << endl;
+    }
+
+    //registra qualquer ação do operador
+    void registrarAcaoOperador(string NomeUsuario, string Acao) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] OPERADOR " + NomeUsuario + ": " + Acao;
+        cout << linha << endl;
+        ArquivoAcoes << linha << endl;
+    }
+
+    //registra as propostas de manutenções feitas pelo técnico
+    void registrarPropostaManutencao(string NomeTecnico, string Equipamento, string Motivo, string Data) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] PROPOSTA DE MANUTENÇÃO" + " | Técnico: " + NomeTecnico + " | Equipamento " + Equipamento + " | Motivo: " + Motivo + " | Data: " + Data + " | Status: AGUARDANDO APROVAÇÃO";
+        cout << linha << endl;
+        ArquivoAcoes << linha << endl;
+    }
+
+    //registra aprovação de manutenção pelo admin
+    void registrarAprovacaoManutencao(string NomeAdmin, string NomeTecnico, string Equipamento) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] MANUTENÇÃO APROVADA" + " | Admin: " + NomeAdmin + " | Técnico: " + NomeTecnico + " | Equipamento " + Equipamento;
+        cout << linha << endl;
+        ArquivoAcoes << linha << endl;
+    }
+
+    //registra recusa de manutenção pelo admin com motivo obrigatório
+    void registrarRecusaManutencao(string NomeAdmin, string NomeTecnico, string Equipamento, string MotivoRecusa) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] MANUTENÇÃO RECUSADA" + " | Admin: " + NomeAdmin + " | Técnico: " + NomeTecnico + " | Equipamento " + Equipamento + " | Motivo: " + MotivoRecusa;
+        cout << linha << endl;
+        ArquivoAcoes << linha << endl;
+    }
+
+    //registra conclusão de manutenção
+    void registrarConclusaoManutencao(string NomeTecnico, string Equipamento) {
+        string linha = "[CICLO " + to_string(CicloAtual) + "] MANUTENÇÃO CONCLUÍDA" + " | Técnico: " + NomeTecnico + " | Equipamento " + Equipamento;
+        cout << linha << endl;
+        ArquivoAcoes << linha << endl;
+    }
+};
+
+//GERADOR DE JSON
+//escreve as leituras da planta em formato JSON lines (.jsonl) para que elas possam ser lidas por softwares de análise de dados
+//cada linha é um objeto json independente, facil de ler do python
+//o python vai ler esse arquivo e  mostrar no streamlit
+class GeradorJSON {
+    private:
+    ofstream Arquivo;
+
+    //pega o horário atual do computador e formata como texto
+    //exemplo de saida: 2025-06-10T14:35:22
+    string gerarTimestamp() {
+        time_t agora = time(nullptr); //pega o tempo atual em segundos
+        tm* t = localtime(&agora); //converte para dia/hora legível
+        char buffer[25]; //caractere temporário pra guardar o texto
+        //formata no padrão ISO 8601 que o python entende mais facil
+        strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", t);
+        return string(buffer); //transforma o buffer em string e devolve
+    }
+
+    public:
+    GeradorJSON() {
+        //abre o arquivo no modo append pra não apagar leituras antigas
+        Arquivo.open("leituras.json", ios::app);
+    }
+
+    ~GeradorJSON() {
+        Arquivo.close();
+    }
+
+    //escreve uma leitura do sensor no arquivo
+    void escreverLeitura(string tag, string variavel, double valor, string unidade, string status, int ciclo) {
+    Arquivo << "{" << "\"tipo\":\"leitura\"," << "\"sensor\":\"" << tag << "\"," << "\"valor\":" << valor << "," << "\"unidade\":\"" << unidade << "\"," << "\"status\":\"" << status << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;    }
+
+    // Escreve o estado de um atuador (bomba ou válvula)
+    void escreverAtuador(string nome, string estado, double valor, int ciclo) {
+        Arquivo << "{" << "\"tipo\":\"atuador\"," << "\"nome\":\"" << nome << "\"," << "\"estado\":\"" << estado << "\"," << "\"valor\":" << valor << "," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
+    }
+
+    //escreve um alarme ativo
+    void escreverAlarme(string codigo, string severidade, int ciclo) {
+        Arquivo << "{" << "\"tipo\":\"alarme\"," << "\"codigo\":\"" << codigo << "\","<< "\"severidade\":\"" << severidade << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo<< "}" << endl;
+    }
+
+    //escreve um comando executado pelo operador
+    void escreverComando(string nomeComando, string usuario, int ciclo) {
+        Arquivo << "{" << "\"tipo\":\"comando\"," << "\"nome\":\"" << nomeComando << "\"," << "\"usuario\":\"" << usuario << "\"," << "\"timestamp\":\"" << gerarTimestamp() << "\"," << "\"ciclo\":" << ciclo << "}" << endl;
+    }
+};
+
+//definindo os níveis de acesso, onde quanto maior o número, mais permissões tem o usuário
+enum class NivelAcesso {
+    OPERADOR = 1, //ajusta os setpoints, vê leituras, faz pedidos de processo e reconhece alarmes
+    TECNICO = 2, //agenda manutenção, coloca equipamentos em manutenção, acessa históricos
+    ADMIN = 3 //desliga tudo, cadastra usuários, altera os limites de segurança do sistema, faz tudo dos outros dois em caso de emergência, permite manutenções, emite relatórios e registros
+};
+
+class Usuario{
+    private:
+    string Nome;
+    string Senha;
+    NivelAcesso Nivel;
+
+    public:
+    Usuario(string N, string S, NivelAcesso Nv) {
+        Nome = N;
+        Senha = S;
+        Nivel = Nv;
+    }
+
+    bool verificarSenha(string S) const {
+        return Senha == S;
+    }
+
+    //transforma temporariamente as variaveis no tipo inteiro; a lógica é: cada nivel de acesso é representado por um numero, se o usuario logado for um
+    //tecnico (2) e ele tentar apertar um botao que exige ser admin(3), a função faz a conversão e testa se 2 é >= 3, como não é, ela retorna
+    //falso e barra o acesso do técnico
+    bool temPermissao(NivelAcesso NivelNecessario) const {
+        return static_cast<int>(Nivel) >= static_cast<int>(NivelNecessario);
+    }
+
+    string getNome() const { return Nome; }
+    NivelAcesso getNivel() const { return Nivel; }
+
+    //'traduz' o nivel numerico para texto
+    string getNivelTexto() const {
+        if (Nivel == NivelAcesso::ADMIN) return "Administrador";
+        if (Nivel == NivelAcesso::TECNICO) return "Técnico";
+        return "Operador";
+    }
+};
+
+//Gerenciador de login do sistema
+class SistemaAcesso {
+    private:
+    vector<Usuario> Usuarios; //é como uma lista dinâmica (um array que pode crescer) que armazena os usuarios cadastrados
+    Usuario* UsuarioAtivo; //é um ponteiro que aponta diretamente pro usuario que acabou de fazer login. se ninguem estiver logado, ele aponta pro vazio 
+    RegistroSistema& Registro; //é uma referência; em vez de criar um sistema de registro novo, ele conecta diretamnete ao historico central criado antes, é assim q o sistema de login vai gravar coisas no arquivo de texto
+
+    public:
+    SistemaAcesso(RegistroSistema& R) : Registro(R) { //: Registro(R) é uma lista de inicializalçao; como Registro é uma referência e uma referência não pode
+        //nascer vazia, então ela se conecta ao objeto Regitro que nasceu na main e o R é só um apelido que transporta o objeto da main pra dentro da classe
+        UsuarioAtivo = nullptr; //começa apontando pro nada
+        Usuarios.push_back(Usuario("admin", "admin123", NivelAcesso::ADMIN)); //push_back é adicionar ao final da lista
+        Usuarios.push_back(Usuario("tecnico", "tec456", NivelAcesso::TECNICO));
+        Usuarios.push_back(Usuario("operador", "op789", NivelAcesso::OPERADOR));
+    }
+
+    bool login(string Nome, string Senha) {
+        for (int i = 0; i < (int)Usuarios.size(); i++) { //Usuarios.size() devolve quantos usuarios tem casdastrados (tamanho do vetor); esse loop testa usuário por usuário pra validar as credenciais
+            if (Usuarios[i].getNome() == Nome && Usuarios[i].verificarSenha(Senha)) { //checa se o usario e a senha digitados são identicos aos cadastrados
+                UsuarioAtivo = &Usuarios[i]; //guarda o endereço desse usuário especifico que acabou de logar no ponteiro UsuarioAtivo PRA SABERMOS QUEM TÁ OPERANDO o sistema a partir desse momento
+                cout << "[ACESSO] Bem-vindo, " << Nome << " (" << Usuarios[i].getNivelTexto() << ")" << endl; //imprime as boas vindas junto com o nome de usuario e o cargo
+                //usar ponteiro nesse caso da assistencia pra modificar as informações de uma vez em vez de criarmos uma cópia de informações e no caso de alterações
+                // o computador segue o endereço ("vai até a casa dele") e altera a senha diretamente no usuário real que está dentro da lista
+                return true;
+            }
+        }
+        cout << "[ACESSO] Usuário ou senha incorretos." << endl;
+        return false;
+    }
+
+    void logout() {
+        if (UsuarioAtivo != nullptr) {
+            cout << "[ACESSO] Logout: " << UsuarioAtivo->getNome() << endl; //como UsuarioAtivo é um ponteiro, não da pra usar . pra chamar, por isso o uso da seta ->
+            //ele vai até o endereço e chama a função getNome que tem lá dentro
+        }
+        UsuarioAtivo = nullptr; //pra deslogar o usuário o ponteiro volta a apontra pro vazio
+    }
+
+    bool estaLogado() const {
+        return UsuarioAtivo != nullptr; //se o ponteiro for diferente de vazio, tem um endereço guaraddomali, então alguem está logado
+    }
+
+    //função que valida o acesso
+    void exigirPermissao(NivelAcesso NivelNecessario) const {
+        if (UsuarioAtivo == nullptr) {
+            //throw runtime_error é uma clausula de guarda que joga um erro na tela e para o processo;vem da biblioteca stdexcept; throw é um try-catch
+            throw runtime_error("ACESSO NEGADO: Nenhum usuário logado.");
+        }
+        if (!UsuarioAtivo->temPermissao(NivelNecessario)) {
+            throw runtime_error("ACESSO NEGADO: " + UsuarioAtivo->getNome() + " não tem permissão para esta operação.");
+        }
+    }
+
+    //acessa quem está logado no momento
+    string getNomeAtivo() const {
+        if (UsuarioAtivo == nullptr) return "Ninguém"; //devolve 'ninguem' caso n tenha ninguem logado
+        return UsuarioAtivo->getNome();
+    }
+
+    //se o ponteiro for inválido (ninguem logado) a resposta padrão é operador
+    NivelAcesso getNivelAtivo() const {
+        return UsuarioAtivo ? UsuarioAtivo->getNivel() : NivelAcesso::OPERADOR;
+    }
+};
+
+enum class StatusManutencao {
+    NORMAL,
+    ATENCAO,
+    MANUTENCAO
+};
+
+struct AgendamentoManutencao {
+    string NomeEquipamento;
+    string Motivo;
+    string DataAgendada;
+    string NomeTecnico;
+    string NomeAdmin;
+    string MotivoRecusa;
+    bool Aprovada;
+    bool Pendente;
+    bool Concluida;
+};
+
+//acompanha o desgaste das bombas e válvulas pra avisar quando precisam de revisão, antes que quebrem
+class MonitorEquipamento {
+    private:
+    //só o sistema atualiza essas informações
+    string NomeEquipamento;
+    double HorasOperacao;
+    double HorasEmPotenciaAlta;
+    double TemperaturaOperacao;
+    int CiclosLigaDesliga;
+    StatusManutencao Status;
+
+    //constantes de alarme (limites de segurança)
+    const double LIMITE_HORAS_TOTAL = 2000.0;
+    const double LIMITE_HORAS_FORCA = 500.0;
+    const double LIMITE_TEMPERATURA = 80.0;
+    const int LIMITE_CICLOS = 1000;
+
+    public:
+    MonitorEquipamento(string Nome) { //construtor - inicia tudo
+        NomeEquipamento = Nome;
+        HorasOperacao = 0.0;
+        HorasEmPotenciaAlta = 0.0;
+        TemperaturaOperacao = 25.0;
+        CiclosLigaDesliga = 0;
+        Status = StatusManutencao::NORMAL;
+    }
+
+    void atualizar(bool Ligada, double Potencia, double HorasCiclo) { //calcula o desgaste a cada ciclo; recebe 3 informações: a peça ta ligada? qual a potencia? quanto tempo passou?
+        if (!Ligada) {
+            if (TemperaturaOperacao > 25.0) TemperaturaOperacao -= 0.5; //se ta desligado e a peça ta quente, esfria um pouco
+            return;
+        }
+
+        HorasOperacao += HorasCiclo; // soma o tempo que passou no total de horas trabalhadas
+
+        if (Potencia > 80.0) { //desgaste por potencia
+            HorasEmPotenciaAlta += HorasCiclo;
+            TemperaturaOperacao += (Potencia/100.0)*0.3; //se a potencia for alta, o motor ta sofrendo; soma tempo na variavel e a temperatura sobe mais rapido
+        } else {
+            TemperaturaOperacao += (Potencia/100.0)*0.1; //se n for potencia alta, atemperatura sobe mais devagar
+            if (TemperaturaOperacao > 60.0) TemperaturaOperacao -= 0.2; // se passar de 60 graus a refrigeração natural abaixa um pouco a temperatura
+        }
+
+        if (TemperaturaOperacao > 95.0) TemperaturaOperacao = 95.0; //impede que a temperatura passe de 95 na simulação
+
+        verificarLimites(); //verifica se alguma soma estourou os limites de alerta
+    }    
+
+    void registrarCicloLigaDesliga() { //toda vez q a bomba for ligada ele soma 1 nos ciclos e checa os limites
+        CiclosLigaDesliga++;
+        verificarLimites();
+    }
+
+    void entrarEmManutencao() { //se o tecnico chamar essa função, o status muda pra manutenção e o equipamento para
+        Status = StatusManutencao::MANUTENCAO;
+    }
+
+    void concluirManutencao() { //o tecnico terminou o serviço; o status volta pra NORMAL e as horas de desgaste pesado e os ciclos zeram e a temperatura volta a 25 graus, como se tivessem trocado o óleo e limpado o motor
+        //as horas totais não zeram pq a peça continua sendo a mesma
+        Status = StatusManutencao::NORMAL;
+        HorasEmPotenciaAlta = 0.0;
+        CiclosLigaDesliga = 0;
+        TemperaturaOperacao = 25.0;
+    }
+
+    StatusManutencao getStatus() const { return Status; }
+    double getHorasOperacao() const { return HorasOperacao; }
+    double getHorasEmPotenciaAlta() const { return HorasEmPotenciaAlta; }
+    double getTemperaturaOperacao() const { return TemperaturaOperacao; }
+    int getCiclosLigaDesliga() const { return CiclosLigaDesliga; }
+    string getNomeEquipamento() const { return NomeEquipamento; }
+
+    string getStatusTexto() const {
+        if (Status == StatusManutencao::MANUTENCAO) return "EM MANUTENÇÃO";
+        if (Status == StatusManutencao::ATENCAO) return "ATENÇÃO";
+        return "NORMAL";
+    }
+
+    string getMotivoAlerta() const {
+        if (HorasOperacao >= LIMITE_HORAS_TOTAL) return "Limite de horas de operação atingido";
+        if (HorasEmPotenciaAlta >= LIMITE_HORAS_FORCA) return "Excesso de horas em alta potência";
+        if (TemperaturaOperacao >= LIMITE_TEMPERATURA) return "Temperatura de operação elevada";
+        if (CiclosLigaDesliga >= LIMITE_CICLOS) return "Excesso de ciclos liga/desliga";
+        return "";
+    }
+
+    private: // é privado pq só o próprio monitor usa
+    void verificarLimites() {
+        if (Status == StatusManutencao::MANUTENCAO) return;
+        bool alertar = (HorasOperacao >= LIMITE_HORAS_TOTAL) || (HorasEmPotenciaAlta >= LIMITE_HORAS_FORCA) || (TemperaturaOperacao >= LIMITE_TEMPERATURA) || (CiclosLigaDesliga >= LIMITE_CICLOS);
+        if (alertar) Status = StatusManutencao::ATENCAO;
+    }
+
+};
+
+//CRIA um fluxo de trabalho: tecnico pede autorização, admin aprova ou recusa e depois vai pra manutenção
+class GerenciadorManutencao {
+    private:
+    vector<AgendamentoManutencao> Agendamentos; //guarda os pedidos de manutenção
+    vector<MonitorEquipamento*> Monitores; //pega o endereço das peças pra avisar q elas devem parar de rodar pra entrar em manutenção
+    RegistroSistema& Registro; //salva no arquivo (não cria um novo, ele usa o que já foi aberto na main)
+
+    public:
+    GerenciadorManutencao(RegistroSistema& R) : Registro(R) {} //temos que passar o registro p ele nascer na main
+
+    void registrarMonitor(MonitorEquipamento* M) { //adicionando as máquinas na lista do lista do gerenciador
+        Monitores.push_back(M); //push back joga no final da lista
+    }
+
+    //Técnico propõe a manutenção e fica pendente ate o admin aprovar
+    //pede o nome da maquina, o pq quebrou, a data e EXIGE o acesso pra ver quem ta logado
+    void proporManutencao(string NomeEquip, string Motivo, string Data, SistemaAcesso& Acesso) {
+        Acesso.exigirPermissao(NivelAcesso::TECNICO);
+
+        AgendamentoManutencao ag; //criando uma 'prancheta de serviço' nova e em branco
+        //preeche esses dados usando os parâmetros da função
+        ag.NomeEquipamento = NomeEquip;
+        ag.Motivo = Motivo;
+        ag.DataAgendada = Data;
+        ag.NomeTecnico = Acesso.getNomeAtivo();  //puxa automaticamente os dados de quem ta logado
+        //preenche o resto com dados vazios / padrões pq ainda n houve aprovação/recusa
+        ag.NomeAdmin = "";
+        ag.MotivoRecusa = "";
+        ag.Aprovada = false;
+        ag.Pendente = true;
+        ag.Concluida = false;
+        Agendamentos.push_back(ag); //guradndo essa prancheta dentro da lista agendamentos
+
+        Registro.registrarPropostaManutencao(Acesso.getNomeAtivo(), NomeEquip, Motivo, Data); //escrevendo no arquivo q o tecnico pediu essa mantenção
+    }
+
+    //admin aprovou uma proposta pendente
+    void aprovarManutencao(string NomeEquip, SistemaAcesso& Acesso) {
+        Acesso.exigirPermissao(NivelAcesso::ADMIN);
+
+        for (auto& ag : Agendamentos) { //abre a lista agendamentos e olha prancheta por prancheta; auto& garante q é a prancheta original e não uma cópia; o ag é a prancheta usada no momneto
+            if (ag.NomeEquipamento == NomeEquip && ag.Pendente) { //testa se o nome do equipamento é o mesmo q o admin quer aprovar e se está como pendente
+                //se for a certa, ele altera o status e assina o nome do admin logado
+                ag.Aprovada = true;
+                ag.Pendente = false;
+                ag.NomeAdmin = Acesso.getNomeAtivo();
+
+                Registro.registrarAprovacaoManutencao(Acesso.getNomeAtivo(), ag.NomeTecnico, NomeEquip);
+
+                //avisa o monitor do equipamento
+                for (auto* m : Monitores) { //olha a lista de monitores e olha máquina por maquina (m)
+                    //se achar a máquina com o nome certo, chama a função entrar em manutnção, que congela o desgaste e avisa ao sistema q ela parou
+                    if (m->getNomeEquipamento() == NomeEquip) {
+                        m->entrarEmManutencao();
+                    }
+                }
+                return; //como ja achou e aprovou a manutenção, n precisa continuar olhando as pranchetas
+            }
+        }
+        cout << "[MANUTENÇÃO] Nenhuma proposta pendente encontrada para: " << NomeEquip << endl;
+    }
+
+    //admin recusa uma proposta com motivo obrigatório
+    void recusarManutencao(string NomeEquip, string MotivoRecusa, SistemaAcesso& Acesso) {
+        Acesso.exigirPermissao(NivelAcesso::ADMIN);
+
+        for (auto& ag : Agendamentos) {
+            if (ag.NomeEquipamento == NomeEquip && ag.Pendente) {
+                ag.Aprovada = false;
+                ag.Pendente = false;
+                ag.NomeAdmin = Acesso.getNomeAtivo();
+                ag.MotivoRecusa = MotivoRecusa;
+
+                Registro.registrarRecusaManutencao(Acesso.getNomeAtivo(), ag.NomeTecnico, NomeEquip, MotivoRecusa);
+                return;
+            }
+        }
+        cout << "[MANUTENÇÃO] Nenhuma proposta pendente encontrada para: " << NomeEquip << endl;
+    }
+
+    //tecnico conclui a manutenção após a aprovação
+    void concluirManutencao(string NomeEquip, SistemaAcesso& Acesso) {
+        Acesso.exigirPermissao(NivelAcesso::TECNICO);
+
+        for (auto& ag : Agendamentos) {
+            if (ag.NomeEquipamento == NomeEquip && ag.Aprovada && !ag.Concluida) {
+                ag.Concluida = true;
+
+                Registro.registrarConclusaoManutencao(Acesso.getNomeAtivo(), NomeEquip);
+
+                for (auto* m : Monitores) {
+                    if (m->getNomeEquipamento() == NomeEquip) {
+                        m->concluirManutencao();
+                    }
+                }
+                return;
+            }
+        }
+        cout << "[MANUTENÇÃO] Nenhuma manutenção aprovada pendente para: " << NomeEquip << endl;
+    }
+
+    //verifica alarmes automáticos e registra no arquivo
+    void verificarAlertas() {
+        for (auto* m : Monitores) {
+            if (m->getStatus() == StatusManutencao::ATENCAO) {
+                Registro.registrarAlarme(m->getNomeEquipamento() + ": " + m->getMotivoAlerta() + " | Solicite manutenção ao técnico.");
+            }
+        }
+    }
+
+    //exibe só pro admin; essa função é proibida de acessar qualquer variavel, só pode ler, por isso o const
+    void exibirHistorico(SistemaAcesso& Acesso) const {
+        Acesso.exigirPermissao(NivelAcesso::ADMIN);
+        cout << "\n-- HISTÓRICO DE MANUTENÇÕES --" << endl;
+
+        if (Agendamentos.empty()) { cout << " Nenhum registro." << endl; return; } //testa se a lista ta completamente vazia
+
+        for (const auto& ag : Agendamentos) {
+            cout << " Equipamento: " << ag.NomeEquipamento << " | Tecnico: " << ag.NomeTecnico << " | Motivo: " << ag.Motivo << " | Data: " << ag.DataAgendada;
+            if (ag.Pendente) {
+                cout << " | AGUARDANDO APROVAÇÃO";
+            } else if (ag.Aprovada) {
+                cout << " | APROVADA por: " << ag.NomeAdmin;
+                if (ag.Concluida) cout << " | CONCLUÍDA";
+            } else {
+                cout << " | RECUSADA por: " << ag.NomeAdmin << " | Motivo: " << ag.MotivoRecusa;
+            }
+            cout << endl;
+        }
+    }
+};
+
+class Bomba {
+    private:
+    string Tag;
+    bool Ligada;
+    bool Falha;
+    double Potencia; //varia de  a 100%
+    double CapacidadeMaxima; //litros por minuto a 100% de potência e válvula 100% aberta
+    bool EstavaLigada; //detecta transição desligada -> ligada
+
+    public:
+    MonitorEquipamento Monitor;
+
+    Bomba(string T, double CapMax) : Monitor(T) {
+        Tag = T;
+        Ligada = false;
+        Falha = false;
+        Potencia = 0.0;
+        CapacidadeMaxima = CapMax;
+        EstavaLigada = false;
+    }
+
+    void Ligar(double PotenciaDesejada){
+        if (Falha == true){
+            return; // com defeito não liga
+        }
+        if (Monitor.getStatus() == StatusManutencao::MANUTENCAO) {
+            cout << "[AVISO] " << Tag << " está em manutenção." << endl;
+            return;
+        }
+        if (!EstavaLigada) Monitor.registrarCicloLigaDesliga();
+        Ligada = true;
+        EstavaLigada = true;
+        Potencia = PotenciaDesejada;
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0) Potencia = 0.0;
+    }
+
+    void AjustarPotencia(double NovaPotencia){
+        if (Falha == true || Ligada == false){
+            return; // só ajusta se estiver ligada e sem falha
+        }
+        Potencia = NovaPotencia;
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0)   Potencia = 0.0;
+    }
+
+    void Desligar(){
+        EstavaLigada = false;
+        Ligada = false;
+        Potencia = 0.0;
+    }
+
+    void AtivarFalha(){
+        Falha = true;
+        Ligada = false;
+        Potencia = 0.0;
+        EstavaLigada = false;
+    }
+
+    void atualizarMonitor(double HorasCiclo) {
+        Monitor.atualizar(Ligada, Potencia, HorasCiclo);
+    }
+
+    //aqui retornamos a vazão real que a bomba está produzindo, e pra calcular completamente, a válvula precisa passar sua abertura
+    double calcularVazao(double AberturaValvula) const {
+        if (Ligada == false || Falha == true){
+            return 0.0;
+        }
+        return (Potencia / 100.0) * (AberturaValvula / 100.0) * CapacidadeMaxima;
+    }
+
+    bool estaLigada() const { return Ligada; }
+    bool temFalha() const { return Falha; }
+    double getPotencia() const { return Potencia; }
+    double getCapacidadeMaxima() const { return CapacidadeMaxima; }
+    string getTag() const { return Tag; }
+
+};
+
+//redundância industrial: configuração standby ou failover, q tem 2 componentes de modo q quando um da problema, o outro assume
+class ParBombas{
+    private:
+    Bomba Principal; //dois objetos bomba guardados dentro da classe
+    Bomba Reserva;
+    bool UsandoReserva;
+
+    public:
+    ParBombas(string TagPrincipal, string TagReserva, double CapMax) : Principal(TagPrincipal, CapMax), Reserva(TagReserva, CapMax) { //constrói as 2 bombas de uma vez só
+        UsandoReserva = false; //por padrão, a reserva vem desativada
+    }
+
+    void Ligar(double Potencia) {
+        if (deveUsarReserva()) { //verifica se deve usar a reserva
+            if(!UsandoReserva) { //testa se ja tava usando a reserva
+                cout << "[REDUNDÂNCIA] Alternando para reserva: " << Reserva.getTag() << endl;
+                Principal.Desligar();
+                UsandoReserva = true;
+            }
+            Reserva.Ligar(Potencia);
+        } else {
+            UsandoReserva = false;
+            Principal.Ligar(Potencia);
+        }
+    }
+
+    void Desligar() { //funciona como um botão de emergencia; manda o sinal pras duas pararem
+        Principal.Desligar();
+        Reserva.Desligar();
+    }
+
+    double calcularVazao(double AberturaValvula) const {
+        if (UsandoReserva) return Reserva.calcularVazao(AberturaValvula);
+        return Principal.calcularVazao(AberturaValvula);
+    }
+
+    void AjustarPotencia(double Potencia) {
+    if (UsandoReserva) Reserva.AjustarPotencia(Potencia);
+    else  Principal.AjustarPotencia(Potencia);
+}
+
+    void atualizarMonitores(double HorasCiclo){ //a cada ciclo, avisa o tempo q passou pras duas bombas
+        //mesmo a q esta desligada rece o aviso e usa esse tempo pra esfriar a temperatura
+        Principal.atualizarMonitor(HorasCiclo);
+        Reserva.atualizarMonitor(HorasCiclo);
+    }
+
+    //coloca a principal em manutenção e trasfere carga pra reserva
+    void iniciarManutencaoPrincipal(SistemaAcesso& Acesso) {
+        Acesso.exigirPermissao(NivelAcesso::TECNICO);
+        cout << "[MANUTENÇÃO] Transferindo carga: " << Principal.getTag() << " -> " << Reserva.getTag() << endl;
+        Principal.Monitor.entrarEmManutencao();
+        Principal.Desligar();
+        UsandoReserva = true;
+    }
+
+    //retornam uma referência ás bombas caso alguém de fora precise olhar os status delas
+    Bomba& getPrincipal() { return Principal; }
+    Bomba& getReserva() { return Reserva; }
+    bool estaUsandoReserva() const { return UsandoReserva; }
+    string getTagAtiva() const { return UsandoReserva ? Reserva.getTag() : Principal.getTag();} // essa sintaxe de ? é um operador ternário
+
+    private:
+    bool deveUsarReserva() const {
+        return Principal.temFalha() || Principal.Monitor.getStatus() == StatusManutencao::MANUTENCAO;
+    }
+};
+
+//o sistema vai usar isso para decidir automaticamente os parâmetros sem a intervenção do operador
+class CalculadoraDemanda{
+    public:
+
+    //guarda o resultado do cálculo - tudo varia de 0 a 100%
+    struct Parametros {
+        double AberturaValvulaQuente;
+        double AberturaValvulaFria;
+        double PotenciaBombaQuente;
+        double PotenciaBombaFria;
+    };
+
+    //recebe o que o operador quer e devolve o que o sistema deve fazer; temDesejada é a temperatura em °C que o operador pediu e volumePorMinuto é a vazão de saída desejada em l/min
+    static Parametros calcular(double TempDesejada, double VolumePorMinuto) {
+        Parametros p;
+
+        const double TEMP_QUENTE = 70.0;
+        const double TEMP_FRIA  = 20.0;
+
+        //garantindo que a temperatura desejada está dentro dos limites possíveis
+        if (TempDesejada >= TEMP_QUENTE) TempDesejada = TEMP_QUENTE - 1.0;
+        if (TempDesejada <= TEMP_FRIA) TempDesejada = TEMP_FRIA + 1.0;
+
+        //calculando a fração de cada fonte necessária p/ atingir a temperatura desejada
+        double fracaoQuente = (TempDesejada - TEMP_FRIA) / (TEMP_QUENTE - TEMP_FRIA);
+        double fracaoFria = 1.0 - fracaoQuente;
+
+        //as válvulas abrem proporcionalmente à fração necessária garantindo que a mistura saia na temperatura certa
+        p.AberturaValvulaQuente = fracaoQuente * 100.0;
+        p.AberturaValvulaFria = fracaoFria * 100.0;
+
+        //visando a durabilidade, as bombas operam a no máx 70% da sua potência em condições normais, p/ preservar a vida útil e evitar superaquecimento
+        //o volume pedido pelo operador é atingido pela abertura das válvulas, sem forcar as bombas
+        double potenciaBase = 70.0;
+
+        //se o volume pedido for baixo, a potência é ainda mais reduzida. temos como referência que 100 l/min é volume alto no sistema
+        double fatorVolume = VolumePorMinuto / 100.0;
+        if (fatorVolume > 1.0) fatorVolume = 1.0;
+
+        p.PotenciaBombaQuente = potenciaBase * fatorVolume;
+        p.PotenciaBombaFria = potenciaBase * fatorVolume;
+
+        //garantindo potência mínima em 20% pra manter o fluxo estável
+        if (p.PotenciaBombaQuente < 20.0) p.PotenciaBombaQuente = 20.0;
+        if (p.PotenciaBombaFria < 20.0) p.PotenciaBombaFria = 20.0;
+
+        return p;
+     }
+};
+
+
+class Valvula{ // Precisa ter abertura de 0 a 100%
+    private:
+    string Tag;
+    double Abertura; // 0-100%
+    bool Travada;
+    
+    public:
+    Valvula(string T){
+        Tag = T;
+        Abertura = 0.0;
+        Travada = false;
+    }
+
+    void Abrir(double Percentual){
+        if(Travada) return;   // Se a válvula estiver travada não muda nada
+        
+        Abertura = Percentual;
+        
+        if(Abertura > 100.0) Abertura = 100.0;
+        if (Abertura < 0.0) Abertura = 0.0;
+    }
+
+    void Fechar(){
+        if (!Travada) Abertura = 0.0;
+    }
+
+    void Travar() { Travada = true; }
+    void Destravar() { Travada = false; }
+
+    double getAbertura() const { return Abertura; }
+    bool estaTravada() const { return Travada; }
+    string getTag() const {return Tag; }
+};
+
+//serpentina -> equipamento que aquece ou resfria o líquido dos reservatórios
+//ela é basicamente um cano em espiral que passa por dentro de um tanque. denttro dele pode passar água quente, vapor ou gás refrigerante, aí controla a temperatura
+enum class TipoSerpentina { //criando uma lista de opções fixas; a serpentina no simulador só pode ser de dois tipos, evitando q alguem digite o tipo errado como texto
+    AQUECIMENTO,
+    RESFRIAMENTO
+};
+
+class Serpentina {
+    private:
+    string Tag;
+    TipoSerpentina Tipo;
+    double Potencia; //0 a 100%
+    bool Ligada;
+    bool Falha;
+    double TemperaturaAlvo; //temperatura que ela tenta manter
+
+    public:
+    MonitorEquipamento Monitor; //mesmo sistema de desgaste das bombas; como está no bloco public, o GerenciadorManutencao vai conseguir ler e alterar a saúde  da serpentina
+
+    Serpentina(string T, TipoSerpentina Tp, double TempAlvo) : Monitor(T) { //construtor; passamos a tag, o tipo e a temperatura alvo; ': Monitor(T)' cria o monitoramneto da saúde dela passando o nome automaticamente
+       //configurando os valores iniciais
+        Tag = T;
+        Tipo = Tp;
+        Potencia = 0.0;
+        Ligada = false;
+        Falha = false;
+        TemperaturaAlvo = TempAlvo;
+    }
+
+    void Ligar(double PotenciaDesejada) {
+        if (Falha) return; //maquina quebrada não liga!
+        if (Monitor.getStatus() == StatusManutencao::MANUTENCAO) { //maquina em manutenção NÃO LIGA
+            cout << "[AVISO] " << Tag << " esta em manutencao." << endl;
+            return;
+        }
+        Ligada = true;
+        Potencia = PotenciaDesejada;
+        //se o operador digitar 150%, o sistema limita pra 100%, se digitar negativo, limita pra 0
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0) Potencia = 0.0;
+    }
+
+    void AjustarPotencia(double NovaPotencia) {
+        if (Falha || !Ligada) return;
+        //atualiza o valor e define os limites
+        Potencia  = NovaPotencia;
+        if (Potencia > 100.0) Potencia = 100.0;
+        if (Potencia < 0.0) Potencia = 0.0;
+    }
+
+    void Desligar() {
+        Ligada = false;
+        Potencia = 0.0;
+    }
+
+    void AtivarFalha() { //força uma pane no equipamento; simula acidente ou quebra; desliga tudo e fica travada em estado de erro
+        Falha = true;
+        Ligada = false;
+        Potencia = 0.0;
+    }
+
+    //calcula quanto a serpentina consegue mudar a temperatura do reservatório a cada ciclo baseado na sua potencia atual
+    double calcularVariacaoTemperatura() const {
+        if (!Ligada || Falha) return 0.0; //se estiver desligada ou quebrada, n esquenta nem esfria
+
+        //100% de potencia causa variação máxima de 2 graus por ciclo; então a variação é proporcional a potencia atual
+        double variacaoMaxima = 0.5;
+        if (Tipo == TipoSerpentina::AQUECIMENTO) {
+            return (Potencia / 100.0) * variacaoMaxima; //positico aquece
+        } else {
+            return -(Potencia /100.0) * variacaoMaxima; //negativo resfria
+        }
+    }
+
+    void atualizarMonitor(double HorasCiclo) { //repassando os dadsos pro monitor calcular o desgaste termico a cada ciclo
+        Monitor.atualizar(Ligada, Potencia, HorasCiclo);
+    }
+
+    //bloco de funlções get que só entrgam cópias dos valores privados, com o const garantindo que os dados não vão ser alterados
+    bool estaLigada() const { return Ligada; }
+    bool temFalha() const { return Falha; }
+    double getPotencia() const { return Potencia; }
+    double getTemperaturaAlvo() const { return TemperaturaAlvo; }
+    string getTag() const { return Tag; }
+    TipoSerpentina getTipo() const { return Tipo; }
+};
+
+
+class Sensor {
+    protected: // Assim a main não altera nada mas os sensores que herdarem a classe pode realizar as alterações necessárias.
+    string Tag;
+    string Unidade;
+    double Valor;
+
+    public: 
+    Sensor(string t, string u) : Tag(t), Unidade(u),Valor(0.0) {} // As chaves ficam vazias pois não tem nenhuma outra ação para realizar, já foi inicializado as variáveis
+
+    virtual ~Sensor(){} // Destruidor de objetos/classes - me parece EXTREMAMENTE desnecessário mas mantive para ver a diferença que faz no código
+
+    virtual void simular(bool BombaLigada, bool ValvulaAberta) = 0; // Cada sensor simula de uma maneira diferente
+
+    // 'const' pq são funções que servem apenas para leitura de dados, sem alterações
+    // 'return tag' para retornar o nome de cada sensor
+    string getTag() const {return Tag;}
+    string getUnidade() const {return Unidade;}
+    double getValor() const {return Valor;}
+    };
+
+// SensorNivel herdando Sensor
+class SensorNivel : public Sensor {
+    public:
+    // Chama o construtor e
+    // 'Empurra' o texto "t" para a classe "mãe" e avisa que a unidade de medida utilizada nesta classe será %
+    SensorNivel(string t) : Sensor(t, "%") {
+        Valor = 90.0;
+    } 
+    // Para a função simular vamos tentar usar o conceito chamado "Caminhada Aleatória (Random Walk)"
+    // Em vez de sortear números completamente novos e aleatórios pegamos o 'valor' e sorteamos uma pequana variação (um "ruido") para subtrair dele
+    void simular(bool BombaLigada, bool ValvulaAberta) override { 
+
+        // 1. Configurar o gerador de números aleatórios do C++
+        static std::random_device rd;
+	    static std::mt19937 gen(rd());
+
+        if(BombaLigada == true){ // Se a bomba estiver ligada 
+            
+            // 2. Definir que a variação vai ser pequena: entre [0.5% e 1.5%] 
+	        std::uniform_real_distribution<double> variacao(0.5, 1.5);
+            // 3. Aplicar a pequena variação no valor atual
+	        Valor += variacao(gen);
+            // 4. Segurança: não deixa o reservatório passsar do 100% nem ficar negativo (< 0.0%)
+	        if(Valor > 100.0){
+		    Valor = 100.0;
+	        }
+	        if(Valor < 0.0){
+		    Valor = 0.0;
+	        }    
+        }
+
+        else if(ValvulaAberta == true){
+            
+            // 2. Definir que a variação vai ser pequena: entre [-0.5% e -1.5%] 
+	        std::uniform_real_distribution<double> variacao(-1.5, -0.5);
+            // 3. Aplicar a pequena variação no valor atual
+	        Valor += variacao(gen);
+            // 4. Segurança: não deixa o reservatório passsar do 100% nem ficar negativo (< 0.0%)
+	        if(Valor > 100.0){
+		    Valor = 100.0;
+	        }
+	        if(Valor < 0.0){
+		    Valor = 0.0;
+	        } 
+        }
+
+        else{
+            
+
+            // 2. Definir que a variação vai ser pequena: entre [-1.5% e 1.5%] 
+	        std::uniform_real_distribution<double> variacao(-1.5, 1.5);
+
+            // 3. Aplicar a pequena variação no valor atual
+	        Valor += variacao(gen);
+
+            // 4. Segurança: não deixa o reservatório passsar do 100% nem ficar negativo (< 0.0%)
+	        if(Valor > 100.0){
+		        Valor = 100.0;
+	        }
+	        if(Valor < 0.0){
+		        Valor = 0.0;
+	        }
+        }
+    }
+};
+
+class SensorPressao : public Sensor {
+    public: 
+    SensorPressao(string t) : Sensor(t, "BAR"){
+        Valor = 0.0;
+    }
+    void simular (bool BombaLigada, bool AbrirValvula) override {
+
+        static std::random_device rd;
+	    static std::mt19937 gen(rd());
+
+        if(BombaLigada == true){   // if(BombaLigada)
+            // 2. Definir que a variação vai ser pequena: entre [0.3% e 0.8%] 
+	        std::uniform_real_distribution<double> variacao(0.3, 0.8);
+            // 3. Aplicar a pequena variação no valor atual
+	        Valor += variacao(gen);
+            // 4. Segurança: não deixa a pressão passsar de 10
+	        if(Valor > 10.0){
+		    Valor = 10.0;
+	        }
+        }
+
+	    else if(BombaLigada == false){    // if(!BombaLigada)
+            // 2. Definir que a variação vai ser pequena: entre [-0.3% e -0.8%] 
+	        std::uniform_real_distribution<double> variacao(-0.8, -0.3);
+            // 3. Aplicar a pequena variação no valor atual
+	        Valor += variacao(gen);
+            // 4. Segurança: não deixa a pressão ficar negativa (< 0.0%)
+	        if(Valor < 0.0){
+		    Valor = 0.0;
+	        }    
+        }
+    }
+};
+
+//sensor de vazão
+class SensorVazao : public Sensor {
+    public:
+    SensorVazao(string t) : Sensor(t, "L/min") {
+        Valor = 0.0;
+    }
+
+    //recebe se a bomba está ligada e qual a abertura da valvula
+    //se a bomba ta desligada: vazao 0; se ligada:: proporcional a abertura
+    void simular(bool BombaLigada, bool ValvulaAberta) override {
+        if (!BombaLigada) {
+            Valor = 0.0;
+            return;
+        }
+        //ValvulaAberta aqui representa a abertura em bool
+        Valor = ValvulaAberta ? 40.0 : 0.0;
+    }
+
+    //versao real: recebe a abertura percentual da valvula
+    //100% de abertura com a bomba ligada = 80 L/min
+    void simularComAbertura(bool BombaLigada, double AberturaValvula) {
+        if (!BombaLigada) {
+            Valor = 0.0;
+            return;
+        }
+        Valor = (AberturaValvula / 100.0) * 80.0;
+    }
+};
+
+
+//3 sensores de temperatura: reservatorio quente, frio e tanque de mistura
+enum class TipoSensorTemp {
+    RESERVATORIO_QUENTE, //le a temp do reservatorio quente
+    RESERVATORIO_FRIO,
+    TANQUE_MISTURA
+};
+
+class SensorTemperatura : public Sensor { //herda a classe mãe Sensor; ganha automaticamente todas as variáveis e funções que a classe mãe tiver
+    private:
+    TipoSensorTemp Tipo; //guarda o tipo do sensor baseado no enum
+
+    public:
+    SensorTemperatura(string T, TipoSensorTemp Tp, double ValorInicial) : Sensor(T, "°C") { //construtor
+        Tipo = Tp;
+        Valor = ValorInicial;
+   }
+   
+   //simula leitura do reservatório quente ou frio com pequeno ruído; a serpentina vai manter o valor perto do alvo, então o ruído é pequeno
+   void simular(bool BombaLigada, bool ValvulaAberta) override{ //override avisa ao compilador q estamos reescrevendo a função simular q já existia na classe mãe; recebe o estado das bombas e válvulas só pq a classe mãe exige, mas não usamos
+        static random_device rd;
+        static mt19937 gen(rd());
+
+        //reservatorios tem o ruido pequeno pq a serpentina estabiliza
+        if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE || Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
+            uniform_real_distribution<double> ruido(-0.05, 0.05); //cria um sorteio de numeros quebrados entre -0,05 e 0,05 graus
+            Valor += ruido(gen); //simula o ruido eletrico adicionando os valores sorteados antes; o sensor nunca vai medir a temperatura perfeitamente estatica, sempre vai ter uma pequena oscilação
+        }
+   }
+
+   //o tanque de mistura é atualizado pelo atualizarValorMistura()
+   void atualizarValorMistura(double NovaTemperatura) {
+    Valor = NovaTemperatura;
+   }
+
+   //aplica o efeito da serpentina no reservatorio
+   void atualizarValorReservatorio(double VariacaoSerpentina, double TempAlvo) {
+    Valor += VariacaoSerpentina;
+    //simula q o liquido resiste a mudanças bruscas de temperatura
+    if (Tipo == TipoSensorTemp::RESERVATORIO_QUENTE) {
+        if (Valor > 75.0) Valor = 75.0; //limite max de segurança
+        if (Valor < 55.0) Valor = 55.0; //minimo: caldeira sempre ajuda
+    } else if (Tipo == TipoSensorTemp::RESERVATORIO_FRIO) {
+        if (Valor > 30.0) Valor = 30.0;
+        if (Valor < 10.0) Valor = 10.0;
+    }
+   }
+
+   TipoSensorTemp getTipo() const { return Tipo; } //entrega qual a utilidade e o tipo do sensor
+};
+
+//reservatórios: cada um mantem sua temperatura com a serpentina automaticamente
+//cria o controle automático (tipo um termostato de ar-condicionado) dos tanques e calcula a física real de mistura de líquidos
+class ReservatorioQuente {
+    private:
+    string Tag;
+    Serpentina SerpentinaAquecimento;
+    SensorTemperatura Sensor;
+
+    const double TEMP_ALVO = 70.0;
+    const double TOLERANCIA = 2.0; //aceita entre 68 e 72 graus
+
+    public:
+    ReservatorioQuente(string T) : Tag(T), SerpentinaAquecimento(T + "-SERP", TipoSerpentina::AQUECIMENTO, 70.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_QUENTE, 70.0) { //adiciona o nome do sensor ao sufixo
+        //liga a serpentina na potencia media ao iniciar
+        SerpentinaAquecimento.Ligar(50.0);
+    }
+
+    //chamado a cada ciclo - controla a serpentina e atualiza o sensor
+    void atualizar(double HorasCiclo) {
+        double tempAtual = Sensor.getValor();
+
+        //controle automático da serpentina
+        if (tempAtual < TEMP_ALVO - TOLERANCIA) {
+            //temperatura cauiu - aumenta a potencia da serpentina
+            double novaPotencia = SerpentinaAquecimento.getPotencia() + 10.0;
+            SerpentinaAquecimento.AjustarPotencia(novaPotencia);
+        } else if (tempAtual > TEMP_ALVO + TOLERANCIA) {
+            //temperatura subiu dms - reduz a potencia
+            double novaPotencia = SerpentinaAquecimento.getPotencia() - 10.0;
+            SerpentinaAquecimento.AjustarPotencia(novaPotencia);
+        }
+
+        //aplica o efeito da serpentina na temperatura do sensor
+        double variacao = SerpentinaAquecimento.calcularVariacaoTemperatura();
+        Sensor.atualizarValorReservatorio(variacao, TEMP_ALVO);
+        Sensor.simular(false, false); //aplica o ruido natural
+
+        //atualiza o monitor de desgaste da serpentina
+        SerpentinaAquecimento.atualizarMonitor(HorasCiclo);
+    }
+
+    void simularFalhaSerpentina() { //teste pra quebrar a serpentina de propósito e ver se o sistema de alarmes funciona
+        SerpentinaAquecimento.AtivarFalha();
+        cout << "[FALHA] Serpentina do reservatorio quente falhou!" << endl;
+    }
+
+    double getTemperatura() const { return Sensor.getValor(); }
+    string getTagSensor() const { return Sensor.getTag(); }
+    Serpentina& getSerpentina() { return SerpentinaAquecimento; }
+    SensorTemperatura& getSensor() { return Sensor; }
+};
+
+class ReservatorioFrio {
+    private:
+    string Tag;
+    Serpentina SerpentinaResfriamento;
+    SensorTemperatura Sensor;
+
+    const double TEMP_ALVO = 20.0;
+    const double TOLERANCIA = 2.0; //aceita entre 18 e 20 graus
+
+    public:
+    ReservatorioFrio(string T) : Tag(T), SerpentinaResfriamento(T + "-SERP", TipoSerpentina::RESFRIAMENTO, 20.0), Sensor(T + "-TT", TipoSensorTemp::RESERVATORIO_FRIO, 20.0) {
+        SerpentinaResfriamento.Ligar(50.0);
+    }
+
+    void atualizar(double HorasCiclo) {
+        double tempAtual = Sensor.getValor();
+
+        if (tempAtual > TEMP_ALVO + TOLERANCIA) {
+            //temp subiu - aumenta potencia de resfriamento
+            double novaPotencia = SerpentinaResfriamento.getPotencia() + 10.0;
+            SerpentinaResfriamento.AjustarPotencia(novaPotencia);
+        } else if (tempAtual < TEMP_ALVO - TOLERANCIA) {
+            //temp caiu - reduz potencia
+            double novaPotencia  = SerpentinaResfriamento.getPotencia() - 10.0;
+            SerpentinaResfriamento.AjustarPotencia(novaPotencia);
+        }
+
+        double variacao = SerpentinaResfriamento.calcularVariacaoTemperatura();
+        Sensor.atualizarValorReservatorio(variacao, TEMP_ALVO);
+        Sensor.simular(false, false);
+
+        SerpentinaResfriamento.atualizarMonitor(HorasCiclo);
+    }
+
+    void simularFalhaSerpentina() {
+        SerpentinaResfriamento.AtivarFalha();
+        cout << "[FALHA] Serpentina do reservatório frio falhou!" << endl;
+    }
+
+    double getTemperatura()     const { return Sensor.getValor(); }
+    string getTagSensor()       const { return Sensor.getTag(); }
+    Serpentina& getSerpentina()       { return SerpentinaResfriamento; }
+    SensorTemperatura& getSensor()    { return Sensor; }
+};
+
+//o tanque de mistura recebe água quente e fria, calcula temperatura e monitora o nível
+
+class TanqueMistura {
+    private:
+    string Tag;
+    double Nivel;
+    double Pressao;
+    //3 sensores independentes monitorando o tanque
+    SensorTemperatura SensorTemp;
+    SensorNivel SensorNiv;
+    SensorPressao SensorPress;
+    //limites de segurança usados pra disparar alarmes no sistema caso o tanque mude de estado
+    const double LIMITE_NIVEL_BAIXO = 27.5;
+    const double LIMITE_NIVEL_ALTO = 82.5;
+    const double LIMITE_NIVEL_CRITICO = 95.0;
+    const double LIMITE_PRESSAO_ALTA = 6.5;
+
+    public:
+    //O tanque nasce preenchido até a metade (50%), com pressão atmosférica padrão (1.0 atm), temperatura ambiente de 23°C e gera as tags automáticas dos três sensores (-TT para temperatura, -LT para nível/líquido, -PT para pressão)
+    TanqueMistura(string T) : Tag(T), Nivel(50.0), Pressao(1.0), SensorTemp(T + "-TT", TipoSensorTemp::TANQUE_MISTURA, 23.0), SensorNiv(T + "-LT"), SensorPress(T + "-PT") { //construtor
+    }
+
+    //Chamado a cada ciclo com as vazões e temperatura das fontes
+    //precisa saber quanta água está entrando de cada lado e se a bomba de escoamento ta ligada pra esvaziar o tanque
+    void atualizar(double VazaoQuente, double VazaoFria, double TempQuente, double TempFria, bool BombaSaidaLigada, double HorasCiclo) {
+        //atualiza a temperatura pela fórmula de mistura
+        //se tiver água entrando entrando ele calcula a media ponderada termica e injeta no direto no sensor do tanque
+        double somaVazoes = VazaoQuente + VazaoFria;
+        if (somaVazoes > 0.0) {
+            double tempMistura = (VazaoQuente * TempQuente + VazaoFria * TempFria) / somaVazoes;
+            SensorTemp.atualizarValorMistura(tempMistura);
+        }
+
+        //atualiza o nivel -> entrada menos saida
+        double entrada = (VazaoQuente + VazaoFria) * 0.02; //converte L/min em % por ciclo
+        double saida = BombaSaidaLigada ? 1.0 : 0.2; //se a bomba de saida estiver ligada ele esvazia 1% por ciclo, se não, perde 0,2% por vazamento ou evaporação simulada
+        Nivel += entrada - saida;
+        if (Nivel > 100.0) Nivel = 100.0;
+        if (Nivel < 0.0) Nivel = 0.0;
+
+        //atualiza a pressao com base no nivel e bomba de saida
+        Pressao = 1.0 + (Nivel / 100.0) * 2.0; //começa com 1atm e conforme o nivel sobe o peso da agua adiciona até mais 2 atm 
+        if (BombaSaidaLigada) Pressao += 2.0; //se a bomba estiver ligada ela gera uma CONTRAPRESSAO de mais 2 atm
+        if (Pressao > 10.0) Pressao = 10.0; //trava maxima de 10 atm
+
+        //injeta os valores nos sensores
+        SensorNiv.simular(somaVazoes > 0, false);
+        SensorPress.simular(BombaSaidaLigada, false);
+    }
+//bloco de encapsulamento q contem os getters pra ler os estados sem violar o escopo privado
+    double getTemperatura() const { return SensorTemp.getValor(); }
+    double getNivel() const { return Nivel; }
+    double getPressao() const { return Pressao; }
+    double getLimiteBaixo() const { return LIMITE_NIVEL_BAIXO; }
+    double getLimiteAlto() const { return LIMITE_NIVEL_ALTO; }
+    double getLimiteCritico() const { return LIMITE_NIVEL_CRITICO; }
+    double getLimitePressao() const { return LIMITE_PRESSAO_ALTA; }
+    
+    SensorTemperatura& getSensorTemp() { return SensorTemp; }
+    SensorNivel& getSensorNivel() { return SensorNiv; }
+    SensorPressao& getSensorPress() { return SensorPress; }
+};
+
+//coordena todos os equipamnetos e expoe a interface para as regras
+class PlantaMistura {
+    private:
+    ReservatorioQuente ResQuente;
+    ReservatorioFrio ResFrio;
+    TanqueMistura Tanque;
+    ParBombas BombasQuente;
+    ParBombas BombasFria;
+    Valvula ValvulaQuente;
+    Valvula ValvulaFria;
+    bool BombaSaidaLigada;
+    double SetpointTemperatura;
+    vector<string> Alarmes;
+    double VolumeSolicitado;    // L/min que o operador quer retirar
+    bool   ProcessoAtivo;       // true enquanto estiver atendendo um pedido
+
+    public:
+    PlantaMistura() : ResQuente("RES-Q"), ResFrio("RES-F"), Tanque("TQ-MIX"), BombasQuente("BOMBA-Q1", "BOMBA-Q2", 80.0), BombasFria("BOMBA-F1", "BOMBA-F2", 80.0), ValvulaQuente("FV-QUENTE"), ValvulaFria("FV-FRIA") {
+        VolumeSolicitado = 0.0;
+        ProcessoAtivo = false;
+        BombaSaidaLigada = false;
+        SetpointTemperatura = 45.0;
+    }
+
+    //chamado todo ciclo pra atualizar toda a planta
+    void atualizar(double HorasCiclo) {
+        //atualiza os reservatorios e as serpentinas de cada um
+        ResQuente.atualizar(HorasCiclo);
+        ResFrio.atualizar(HorasCiclo);
+
+        //calcula as vazoes reais com base nas bombas e valvulas
+        double vazaoQuente = BombasQuente.calcularVazao(ValvulaQuente.getAbertura());
+        double vazaoFria = BombasFria.calcularVazao(ValvulaFria.getAbertura());
+
+        //atualiza o tanque com as informações do ciclo
+        Tanque.atualizar(vazaoQuente, vazaoFria, ResQuente.getTemperatura(), ResFrio.getTemperatura(), BombaSaidaLigada, HorasCiclo);
+
+        //atualiza os monitores de desgaste das bombas
+        BombasQuente.atualizarMonitores(HorasCiclo);
+        BombasFria.atualizarMonitores(HorasCiclo);
+    }
+
+    //aplica os parametros calculados pela calculadora demanda
+    void aplicarParametros(CalculadoraDemanda::Parametros p) {
+        ValvulaQuente.Abrir(p.AberturaValvulaQuente);
+        ValvulaFria.Abrir(p.AberturaValvulaFria);
+        BombasQuente.Ligar(p.PotenciaBombaQuente);
+        BombasFria.Ligar(p.PotenciaBombaFria);
+    }
+
+    //usar pra ler o estado da planta
+    double getTemperaturaMistura() const { return Tanque.getTemperatura(); }
+    double getNivelTanque() const { return Tanque.getNivel(); }
+    double getPressaoSaida() const { return Tanque.getPressao(); }
+    double getSetpointTemperatura() const { return SetpointTemperatura; }
+    double getTempReservatorioQ() const { return ResQuente.getTemperatura(); }
+    double getTempReservatorioF() const { return ResFrio.getTemperatura(); }
+    double getLimiteBaixo() const { return Tanque.getLimiteBaixo(); }
+    double getLimiteAlto() const { return Tanque.getLimiteAlto(); }
+    double getLimiteCritico() const { return Tanque.getLimiteCritico(); }
+    double getLimitePressao() const { return Tanque.getLimitePressao(); }
+
+    //ações que as regras chamam pra atuar na planta
+    void aumentarAguaQuente() {
+        ValvulaQuente.Abrir(ValvulaQuente.getAbertura() + 5.0);
+        BombasQuente.Ligar(BombasQuente.calcularVazao(ValvulaQuente.getAbertura()) > 0 ? 70.0 : 20.0);
+    }
+    void reduzirAguaQuente() {
+        ValvulaQuente.Abrir(ValvulaQuente.getAbertura() - 5.0);
+    }
+    void aumentarAguaFria() {
+        ValvulaFria.Abrir(ValvulaFria.getAbertura() + 5.0);
+        BombasFria.Ligar(BombasFria.calcularVazao(ValvulaFria.getAbertura()) > 0 ? 70.0 : 20.0);
+    }
+    void reduzirAguaFria() {
+        ValvulaFria.Abrir(ValvulaFria.getAbertura() - 5.0);
+    }
+    void fecharEntradas() {
+        ValvulaQuente.Fechar();
+        ValvulaFria.Fechar();
+        BombasQuente.Desligar();
+        BombasFria.Desligar();
+    }
+    void ligarBombaSaida() { BombaSaidaLigada = true; }
+    void desligarBombaSaida() { BombaSaidaLigada = false; }
+
+    void setSetpointTemperatura(double Sp) { SetpointTemperatura = Sp;}
+
+    void adicionarAlarme(string Codigo) {
+        Alarmes.push_back(Codigo);
+        cout << "[ALARME] " << Codigo << endl;
+    }
+    // a partir daqui recebe comandos do supervisor
+    void resetarAlarmes() { Alarmes.clear(); }
+    vector<string> getAlarmes() const { return Alarmes; }
+
+    //referencias para pro gerenciador manutenção registrar os monitores
+    ParBombas& getBombasQuente() { return BombasQuente; }
+    ParBombas& getBombasFria() { return BombasFria; }
+    Serpentina& getSerpentinaQ() { return ResQuente.getSerpentina(); }
+    Serpentina& getSerpentinaF() { return ResFrio.getSerpentina(); }
+
+    //simular a falha surante a demonstração
+    void simularFalhaSerpentinaQuente() { ResQuente.simularFalhaSerpentina(); }
+    void simularFalhaSerpentinaFria() { ResFrio.simularFalhaSerpentina(); }
+
+    // NOVA FUNÇÃO: Recebe as ordens do Python e aplica na PlantaMistura
+    void receberComandosSupervisorio(double novo_setpoint, bool emergencia, bool forcar_q, bool forcar_f) {
+        if (emergencia) {
+            cout << "\n🚨 [SUPERVISÓRIO] PARADA DE EMERGÊNCIA ACIONADA! 🚨\n";
+            fecharEntradas();
+            desligarBombaSaida();
+            adicionarAlarme("EMERGENCIA_SUPERVISOR");
+        } else {
+            // Só altera se o supervisor mandar um valor de temperatura novo
+            if (novo_setpoint != SetpointTemperatura) {
+                // Usa a calculadora que o seu grupo criou para ajustar as válvulas!
+                CalculadoraDemanda::Parametros p = CalculadoraDemanda::calcular(novo_setpoint, 2.0); 
+                aplicarParametros(p);
+                setSetpointTemperatura(novo_setpoint);
+            }
+            
+            // Força as bombas usando as classes ParBombas do seu projeto
+            if (forcar_q) {
+                BombasQuente.getPrincipal().Ligar(100.0); 
+            }
+            if (forcar_f) {
+                BombasFria.getPrincipal().Ligar(100.0);
+            }
+        }
+    }
+
+    double getAberturaValvulaQuente() const { return ValvulaQuente.getAbertura(); }
+    double getAberturaValvulaFria()   const { return ValvulaFria.getAbertura(); }
+
+    // Operador faz o pedido: temperatura e volume que quer retirar
+    void solicitarProcesso(double TempDesejada, double VolumeLitros) {
+    // Verifica se tem volume suficiente no tanque
+    // 1% de nível equivale a aproximadamente 10 litros na simulação
+        double volumeDisponivel = (getNivelTanque() - getLimiteBaixo()) * 10.0;
+        if (VolumeLitros > volumeDisponivel) {
+            adicionarAlarme("BLOQUEIO: volume solicitado maior que disponivel no tanque");
+            cout << "[BLOQUEIO] Volume disponivel: " << volumeDisponivel
+                 << " L | Solicitado: " << VolumeLitros << " L" << endl;
+            return;
+        }
+        VolumeSolicitado   = VolumeLitros;
+        ProcessoAtivo      = true;
+        BombaSaidaLigada   = true;
+        cout << "[PROCESSO] Iniciado: " << VolumeLitros
+             << " L a " << TempDesejada << "C" << endl;
+    }
+
+    bool isProcessoAtivo()      const { return ProcessoAtivo; }
+    double getVolumeSolicitado() const { return VolumeSolicitado; }
+
+    void setVolumeSolicitado(double v) { VolumeSolicitado = v; }
+    void setProcessoAtivo(bool v)      { ProcessoAtivo = v; }
+
+
+};
+
+// Essa aqui é a classe Pai - 'contrato' que as regras devem seguir 
+// Armazena a estrutura principal de todas as classes que forem expecificamente de alguma regra do sistema
+class RegraControle{
+    public:
+    virtual ~RegraControle() = default;
+    virtual void aplicar(PlantaMistura& planta) = 0; // '= 0' significa: função sem lógica aqui "{}", as classes filhas são OBRIGADAS a programar a lógica para cada classe especifica
+};
+
+// Regra principal: mantém a temperatura próxima do setpoint
+class RegraControleTemperatura : public RegraControle {
+    public:
+    void aplicar(PlantaMistura& planta) override {
+    // Não atua se não há processo ativo e o tanque já está sendo mantido
+    // pela RegraControleProcesso
+    if (!planta.isProcessoAtivo()) return;
+
+    double temp      = planta.getTemperaturaMistura();
+    double setpoint  = planta.getSetpointTemperatura();
+    double tolerancia = 1.0;
+
+    if (temp < setpoint - tolerancia) {
+        planta.aumentarAguaQuente();
+        planta.reduzirAguaFria();
+    } else if (temp > setpoint + tolerancia) {
+        planta.aumentarAguaFria();
+        planta.reduzirAguaQuente();
+    }
+
+    if (planta.getAberturaValvulaQuente() > 0)
+        planta.getBombasQuente().Ligar(50.0);
+    if (planta.getAberturaValvulaFria() > 0)
+        planta.getBombasFria().Ligar(50.0);
+}
+};
+
+class RegraNivelAlto : public RegraControle {
+    public:
+    void aplicar(PlantaMistura& planta) override {
+        if (planta.getNivelTanque() >= planta.getLimiteCritico()) {
+            planta.fecharEntradas();
+            planta.adicionarAlarme("NIVEL_CRITICO_TRANSBORDO");
+        } else if (planta.getNivelTanque() >= planta.getLimiteAlto()) {
+            planta.reduzirAguaQuente();
+            planta.reduzirAguaFria();
+            planta.adicionarAlarme("NIVEL_ALTO");
+        }
+    }
+};
+
+class RegraNivelBaixo : public RegraControle {
+    public:
+    void aplicar(PlantaMistura& planta) override {
+        if (planta.getNivelTanque() <= planta.getLimiteBaixo()) {
+            planta.aumentarAguaQuente();
+            planta.aumentarAguaFria();
+            planta.adicionarAlarme("NIVEL_BAIXO");
+        }
+    }
+};
+
+class RegraPressaoAlta : public RegraControle {
+    public:
+    void aplicar(PlantaMistura& planta) override {
+        if (planta.getPressaoSaida() >= planta.getLimitePressao()) {
+            planta.fecharEntradas();
+            planta.adicionarAlarme("PRESSAO_ALTA");
+        }
+    }
+};
+
+// Detecta quando a temperatura dos reservatórios está fora do esperado
+// Isso indica falha na serpentina
+class RegraFalhaReservatorio : public RegraControle {
+    public:
+    void aplicar(PlantaMistura& planta) override {
+        if (planta.getTempReservatorioQ() < 55.0) {
+            planta.adicionarAlarme("FALHA_SERPENTINA_QUENTE: temperatura baixa no reservatorio quente");
+        }
+        if (planta.getTempReservatorioF() > 30.0) {
+            planta.adicionarAlarme("FALHA_SERPENTINA_FRIA: temperatura alta no reservatorio frio");
+        }
+    }
+};
+
+// Regra extra da dupla EB-61
+// Controla a saída do tanque baseado no pedido do operador
+class RegraControleProcesso : public RegraControle {
+    private:
+    double VolumeEntregue;
+
+    public:
+    RegraControleProcesso() : VolumeEntregue(0.0) {}
+
+    void aplicar(PlantaMistura& planta) override {
+
+        if (!planta.isProcessoAtivo()) {
+            // Sem processo: mantém nível entre 40 e 60%
+            if (planta.getNivelTanque() < 40.0) {
+                planta.getBombasQuente().Ligar(30.0);
+                planta.getBombasFria().Ligar(30.0);
+            }
+            if (planta.getNivelTanque() >= 60.0) {
+                planta.getBombasQuente().Desligar();
+                planta.getBombasFria().Desligar();
+            }
+            planta.desligarBombaSaida();
+            VolumeEntregue = 0.0;
+            return;
+        }
+
+        // Processo ativo: acumula volume entregue
+        // 1% de nível = ~10 litros por ciclo
+        VolumeEntregue += 10.0;
+
+        if (VolumeEntregue >= planta.getVolumeSolicitado()) {
+            planta.desligarBombaSaida();
+            planta.fecharEntradas();
+            planta.setProcessoAtivo(false);
+            VolumeEntregue = 0.0;
+            cout << "[PROCESSO] Concluido. Volume entregue." << endl;
+            planta.adicionarAlarme("PROCESSO_CONCLUIDO");
+            return;
+        }
+
+        // Segurança: para se nível cair abaixo do limite
+        if (planta.getNivelTanque() <= planta.getLimiteBaixo()) {
+            planta.desligarBombaSaida();
+            planta.setProcessoAtivo(false);
+            VolumeEntregue = 0.0;
+            planta.adicionarAlarme("PROCESSO_INTERROMPIDO: nivel baixo");
+        }
+    }
+};
+
+//PADRÃO COMMAND -> comandos de atuação como objetos
+//cada ação do operador vira uma classe com método executar()
+//isso permite registrar, enfileirar e testar comandos de forma padronizada, sem precisar de if e else espalhados pelo código
+class Comando { //aqui criamos um molde abstrato que todo e qualquer comando do sistema  deve seguir, garantindo que todos os comandos terão a função executar() e nome()
+    public:
+    virtual ~Comando() = default; //garante que quando um comando for deletado da memória atraves de um ponteiro da classe mae, a memoria da classe filha seja limpa corretamente, evitando vazamentos de memória
+    virtual void executar(PlantaMistura& planta) = 0; //contrato obrigatório
+    virtual string nome() const = 0; //identifica o comando no histórico
+};
+
+//comando 1: operador altera a temperatura e volume desejados
+//o sistema recalcula automaticamente valvulas e bombas
+class ComandoAlterarSetPoint : public Comando { //herda de comando, então precisa implementar a função executar() e nome()
+    private:
+    double NovaTemp;
+    double NovoVolume;
+
+    public:
+    ComandoAlterarSetPoint(double Temp, double Volume) {
+        NovaTemp = Temp;
+        NovoVolume = Volume;
+    }
+
+    void executar(PlantaMistura& planta) override {
+        CalculadoraDemanda::Parametros p = CalculadoraDemanda::calcular(NovaTemp, NovoVolume);
+        planta.aplicarParametros(p);
+        planta.setSetpointTemperatura(NovaTemp);
+        cout << "[COMANDO] Setpoint alterado para " << NovaTemp << "C | Volume: " << NovoVolume << " L/min" << endl;
+    }
+
+    string nome() const override {
+        return "ALTERAR_SETPOINT";
+    }
+};
+
+//comando 2: operador desliga tudo em situação de emergência
+class ComandoDesligarTudo : public Comando {
+    public:
+    void executar(PlantaMistura& planta) override {
+        planta.fecharEntradas();
+        planta.desligarBombaSaida();
+        planta.adicionarAlarme("PARADA_MANUAL_OPERADOR");
+        cout << " [COMANDO] Parada manual executada." << endl;
+    }
+
+    string nome() const override {
+        return "DESLIGAR_TUDO";
+    }
+};
+
+//comando 3: operador limpa os alarmes ativos o reconhecimento
+class ComandoResetarAlarmes : public Comando {
+    public:
+    void executar(PlantaMistura& planta) override {
+        planta.resetarAlarmes();
+        cout << "[COMANDO] Alarmes resetados." << endl;
+    }
+
+    string nome() const override {
+        return "RESETAR_ALARMES";
+    }
+};
+
+//Comando 4: liga a bomba de saída pra retirar líquido do tanque
+//verifica se o nível ta acima do limite baixo antes de executar
+class ComandoLigarBombaSaida : public Comando {
+    public:
+    void executar(PlantaMistura& planta) override {
+        if(planta.getNivelTanque() <= planta.getLimiteBaixo()) {
+            planta.adicionarAlarme("BLOQUEIO_BOMBA_SAIDA: nivel insuficiente");
+            cout << "[COMANDO] Bomba de saida bloqueada: nível baixo." << endl;
+            return;
+        }
+        planta.ligarBombaSaida();
+        cout << "[COMANDO] Bomba de saida ligada." << endl;
+    }
+
+    string nome() const override {
+        return "LIGAR_BOMBA_SAIDA";
+    }
+};
+
+int main() {
+
+    RegistroSistema registro;
+    SistemaAcesso acesso(registro);
+    GerenciadorManutencao gerManutencao(registro);
+    GeradorJSON json;
+    GerenciadorComandos receptor("comandos.json");
+    
+    // NOVO: reseta o arquivo de comandos para garantir estado limpo ao iniciar
+    ofstream resetComandos("comandos.json");
+    resetComandos << "{\n\"setpoint_temp\": 45.0,\n\"vazao_alvo\": 60.0,\n\"override_bomba_q\": false,\n\"override_bomba_f\": false,\n\"parada_emergencia\": false,\n\"operador_ativo\": \"sistema\"\n}" << endl;
+    resetComandos.close();
+
+    string nome, senha;
+    cout << "=== LOGIN ===" << endl;
+    cout << "Usuario: "; cin >> nome;
+    cout << "Senha:   "; cin >> senha;
+
+    if (!acesso.login(nome, senha)) {
+        cout << "Login falhou. Encerrando." << endl;
+        return 1;
+    }
+
+    double tempDesejada, volumeDesejado;
+    cout << "\n=== CONFIGURACAO DO PROCESSO ===" << endl;
+    cout << "Temperatura desejada (20 a 70 C): ";  cin >> tempDesejada;
+    cout << "Volume por minuto desejado (L/min): "; cin >> volumeDesejado;
+
+    registro.registrarAcaoOperador(
+        acesso.getNomeAtivo(),
+        "Setpoint definido: " + to_string(tempDesejada) +
+        "C | Volume: "        + to_string(volumeDesejado) + " L/min");
+
+    // Cria a planta e aplica os parâmetros calculados
+    PlantaMistura planta;
+    CalculadoraDemanda::Parametros params =
+        CalculadoraDemanda::calcular(tempDesejada, volumeDesejado);
+    planta.aplicarParametros(params);
+    planta.setSetpointTemperatura(tempDesejada);
+
+    cout << "\n[SISTEMA] Parametros calculados automaticamente:" << endl;
+    cout << "  Valvula quente:  " << params.AberturaValvulaQuente << "%" << endl;
+    cout << "  Valvula fria:    " << params.AberturaValvulaFria   << "%" << endl;
+    cout << "  Potencia bombas: " << params.PotenciaBombaQuente   << "%" << endl;
+
+    // Registra todos os monitores no gerenciador de manutenção
+    gerManutencao.registrarMonitor(&planta.getBombasQuente().getPrincipal().Monitor);
+    gerManutencao.registrarMonitor(&planta.getBombasQuente().getReserva().Monitor);
+    gerManutencao.registrarMonitor(&planta.getBombasFria().getPrincipal().Monitor);
+    gerManutencao.registrarMonitor(&planta.getBombasFria().getReserva().Monitor);
+    gerManutencao.registrarMonitor(&planta.getSerpentinaQ().Monitor);
+    gerManutencao.registrarMonitor(&planta.getSerpentinaF().Monitor);
+
+    // Regras de controle em ordem de prioridade
+    RegraFalhaReservatorio   regraFalha;
+    RegraNivelAlto           regraNivelAlto;
+    RegraNivelBaixo          regraNivelBaixo;
+    RegraPressaoAlta         regraPressaoAlta;
+    RegraControleTemperatura regraTemperatura;
+    RegraControleProcesso regraProcesso;
+
+    // Vetor de regras: o loop aplica todas em ordem a cada ciclo
+    vector<RegraControle*> regras = {
+        &regraFalha,
+        &regraNivelAlto,
+        &regraProcesso,
+        &regraNivelBaixo,
+        &regraPressaoAlta,
+        &regraTemperatura
+    };
+
+    const double HORAS_POR_CICLO = 0.5;
+
+    cout << "\n___ SIMULACAO INICIADA | Usuario: "
+         << acesso.getNomeAtivo() << " ___" << endl;
+    cout << "Comandos:" << endl;
+    cout << "  [ENTER] = avancar ciclo" << endl;
+    cout << "  s       = alterar setpoint" << endl;
+    cout << "  o       = solicitar volume do processo (operador)" << endl;
+    cout << "  m       = propor manutencao (tecnico)" << endl;
+    cout << "  a       = aprovar manutencao (admin)" << endl;
+    cout << "  r       = recusar manutencao (admin)" << endl;
+    cout << "  h       = ver historico (admin)" << endl;
+    cout << "  f       = simular falha serpentina (demonstracao)" << endl;
+    cout << "  q       = encerrar" << endl;
+
+    bool modo_auto = false;    //para alternar entre o modo manual (terminal) e o modo automático (site)
+    int ciclo = 1;
+    while (true) {
+        registro.setCiclo(ciclo);
+
+        cout << "\n>>>> CICLO: " << ciclo
+             << " | Usuario: " << acesso.getNomeAtivo() << endl;
+
+        // Atualiza toda a planta
+        planta.atualizar(HORAS_POR_CICLO);
+
+        // Verifica alertas de manutenção
+        gerManutencao.verificarAlertas();
+
+        // Aplica todas as regras em ordem
+        planta.resetarAlarmes();
+        for (auto* regra : regras) {
+            regra->aplicar(planta);
+        }
+
+        // Registra alarmes ativos no arquivo
+        for (const string& alarme : planta.getAlarmes()) {
+            registro.registrarAlarme(alarme);
+        }
+
+        //escreve todas as leituras no arquivo json a cada ciclo
+        json.escreverLeitura("TQ-MIX-TT", "temperatura_mistura",
+            planta.getTemperaturaMistura(), "C",
+            planta.getAlarmes().empty() ? "OK" : "ALARME", ciclo);
+
+        json.escreverLeitura("TQ-MIX-LT", "nivel_tanque",
+            planta.getNivelTanque(), "%",
+            planta.getAlarmes().empty() ? "OK" : "ALARME", ciclo);
+
+        json.escreverLeitura("TQ-MIX-PT", "pressao_saida",
+            planta.getPressaoSaida(), "BAR",
+            planta.getPressaoSaida() >= 6.5 ? "ALARME" : "OK", ciclo);
+
+        json.escreverLeitura("RES-Q-TT", "temperatura_reservatorio_quente",
+            planta.getTempReservatorioQ(), "C",
+            planta.getTempReservatorioQ() < 55.0 ? "FALHA" : "OK", ciclo);
+
+        json.escreverLeitura("RES-F-TT", "temperatura_reservatorio_frio",
+            planta.getTempReservatorioF(), "C",
+            planta.getTempReservatorioF() > 30.0 ? "FALHA" : "OK", ciclo);
+
+        json.escreverAtuador("BOMBA-Q", 
+            planta.getBombasQuente().estaUsandoReserva() ? "RESERVA" : "PRINCIPAL",
+            planta.getBombasQuente().calcularVazao(50.0), ciclo);
+
+        json.escreverAtuador("BOMBA-F",
+            planta.getBombasFria().estaUsandoReserva() ? "RESERVA" : "PRINCIPAL",
+            planta.getBombasFria().calcularVazao(50.0), ciclo);
+
+        // escreve alarmes ativos no JSON
+        for (const string& alarme : planta.getAlarmes()) {
+            json.escreverAlarme(alarme, "media", ciclo);
+        }
+
+        //Dispara a função que lê o arquivo. Se o admin apertou algo no site, o receptor vai atualizar os valores dentro dele.
+        receptor.atualizarComandos();
+
+        if (receptor.getResetarAlarmes()) {
+            planta.resetarAlarmes();
+            cout << "[COMANDO] Alarmes resetados pelo supervisório." << endl;
+        }
+
+       
+        //extrai as ordens vindas do arquivo JSON enviado pelo servidor web
+        bool emergencia = receptor.getParadaEmergencia(); 
+        double setpoint = receptor.getSetpointTemp();     
+
+        //Aplica as ordens do site (temperatura e overrides das bombas) diretamente na planta
+        planta.receberComandosSupervisorio(setpoint, emergencia, receptor.getOverrideBombaQ(), receptor.getOverrideBombaF());
+
+// Lê comandos de manutenção vindos do Streamlit
+        ifstream arquivoMan("manutencao.json");
+        if (arquivoMan.is_open()) {
+            string conteudo, linha;
+            while (getline(arquivoMan, linha)) conteudo += linha;
+            arquivoMan.close();
+
+            auto extrair = [&](string chave) {
+                size_t p = conteudo.find("\"" + chave + "\"");
+                if (p == string::npos) return string("");
+                p = conteudo.find(":", p) + 1;
+                p = conteudo.find("\"", p) + 1;
+                size_t fim = conteudo.find("\"", p);
+                return conteudo.substr(p, fim - p);
+            };
+
+            if (conteudo.find("\"PROPOR\"") != string::npos) {
+                string eq  = extrair("equipamento");
+                string mot = extrair("motivo");
+                string dat = extrair("data");
+                if (!eq.empty() && !mot.empty()) {
+                    try {
+                        gerManutencao.proporManutencao(eq, mot, dat, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+
+            } else if (conteudo.find("\"APROVAR\"") != string::npos) {
+                string eq = extrair("equipamento");
+                if (!eq.empty()) {
+                    try {
+                        gerManutencao.aprovarManutencao(eq, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+
+            } else if (conteudo.find("\"RECUSAR\"") != string::npos) {
+                string eq  = extrair("equipamento");
+                string rec = extrair("motivo_recusa");
+                if (!eq.empty()) {
+                    try {
+                        gerManutencao.recusarManutencao(eq, rec, acesso);
+                    } catch (runtime_error& e) {
+                        cout << "[MANUTENCAO] " << e.what() << endl;
+                    }
+                }
+                remove("manutencao.json");
+            }
+        } // fecha if arquivoMan.is_open()
+
+        // Lê pedido de processo vindo do Streamlit
+        ifstream arquivoProc("processo.json");
+        if (arquivoProc.is_open()) {
+            string conteudo, linha;
+            while (getline(arquivoProc, linha)) conteudo += linha;
+            arquivoProc.close();
+
+            double tempProc = 0.0;
+            double volProc  = 0.0;
+
+            // extrai temperatura
+            size_t pt = conteudo.find("\"temperatura\"");
+            if (pt != string::npos) {
+                pt = conteudo.find(":", pt) + 1;
+                string val = conteudo.substr(pt, conteudo.find(",", pt) - pt);
+                string valLimpo = "";
+                for (char c : val) if (c != ' ' && c != '\n' && c != '\r') valLimpo += c;
+                val = valLimpo;
+                try { tempProc = stod(val); } catch (...) {}
+            }
+
+            // extrai volume
+            size_t pv = conteudo.find("\"volume\"");
+            if (pv != string::npos) {
+                pv = conteudo.find(":", pv) + 1;
+                string val = conteudo.substr(pv, conteudo.find(",", pv) - pv);
+                string valLimpo = "";
+                for (char c : val) if (c != ' ' && c != '\n' && c != '\r') valLimpo += c;
+                val = valLimpo;
+                try { volProc = stod(val); } catch (...) {}
+            }
+
+            if (tempProc > 0 && volProc > 0) {
+                ComandoAlterarSetPoint cmd_sp(tempProc, 60.0);
+                cmd_sp.executar(planta);
+                planta.solicitarProcesso(tempProc, volProc);
+                registro.registrarAcaoOperador(
+                    acesso.getNomeAtivo(),
+                    "Processo via supervisório: " + to_string(tempProc) +
+                    "C | " + to_string(volProc) + " L");
+                cout << "[PROCESSO] Lido do Streamlit: " << tempProc
+                    << "C | " << volProc << " L" << endl;
+            }
+            remove("processo.json");
+        } // fecha if arquivoProc.is_open()
+
+        if (emergencia) {
+            std::cout << "ALARME DE EMERGENCIA ATIVADO! Desligando processo." << std::endl;
+        } else {
+            std::cout << "Controlando temperatura buscando: " << setpoint << " C" << std::endl;
+        }
+
+        // Relatório do ciclo
+        cout << " [RESERVATORIOS]"
+             << " | Quente: " << planta.getTempReservatorioQ() << "C"
+             << " | Frio: "   << planta.getTempReservatorioF() << "C"
+             << endl;
+
+        cout << " [TANQUE MISTURA]"
+             << " | Temp: "   << planta.getTemperaturaMistura() << "C"
+             << " | Setpoint: "<< planta.getSetpointTemperatura() << "C"
+             << " | Nivel: "  << planta.getNivelTanque()        << "%"
+             << " | Pressao: "<< planta.getPressaoSaida()       << " BAR"
+             << endl;
+
+        cout << " [MONITOR SERP-Q]"
+             << " Temp: "     << planta.getSerpentinaQ().Monitor.getTemperaturaOperacao()
+             << "C | Status: "<< planta.getSerpentinaQ().Monitor.getStatusTexto()
+             << endl;
+
+        //Se o modo automático estiver ligado, pula a leitura do teclado (cin/getline), 
+        // aguarda 5 segundos para a simulação rodar e reinicia o ciclo ouvindo apenas o site
+            if (modo_auto) {
+            this_thread::sleep_for(chrono::seconds(5));
+            ciclo++;
+            continue; 
+        }
+
+        cout << "\nComando (ENTER para avancar): ";
+        string cmd;
+        cin.ignore();
+        getline(cin, cmd);
+
+        //se o usuário digitar 'p' no terminal, ativa o piloto automático e passa o controle para a interface web
+        if (cmd == "p") {
+            modo_auto = true;
+            cout << "\n>>> MODO AUTOMATICO ATIVADO! <<<\n";
+            ciclo++;
+            continue;
+        }
+
+        if (cmd == "q") {
+            cout << "Encerrando." << endl;
+            break;
+
+         } else if (cmd == "s") {
+    double novaTemp, novoVol;
+    cout << "Nova temperatura desejada: "; cin >> novaTemp;
+    cout << "Novo volume por minuto:     "; cin >> novoVol;
+
+    // Cria o objeto comando e executa
+    // O comando já recalcula válvulas e bombas internamente
+    ComandoAlterarSetPoint cmd_setpoint(novaTemp, novoVol);
+    cmd_setpoint.executar(planta);
+
+    // Registra a ação no histórico
+    registro.registrarAcaoOperador(
+        acesso.getNomeAtivo(),
+        "Setpoint alterado via comando: " + to_string(novaTemp) +
+        "C | Volume: " + to_string(novoVol) + " L/min");
+
+        } else if (cmd == "f") {
+            // Simula falha para demonstração
+            cout << "Simular falha em: (1) Serpentina quente  (2) Serpentina fria: ";
+            string op;
+            cin >> op;
+            if (op == "1") planta.simularFalhaSerpentinaQuente();
+            else           planta.simularFalhaSerpentinaFria();
+
+        } else if (cmd == "o") {
+            double tempPedido, volPedido;
+            cout << "Temperatura desejada: "; cin >> tempPedido;
+            cout << "Volume desejado (L):   "; cin >> volPedido;
+
+            ComandoAlterarSetPoint cmd_sp(tempPedido, volPedido);
+            cmd_sp.executar(planta);
+            planta.solicitarProcesso(tempPedido, volPedido);
+
+            registro.registrarAcaoOperador(
+            acesso.getNomeAtivo(),
+            "Solicitou processo: " + to_string(tempPedido) +
+            "C | " + to_string(volPedido) + " L");
+        
+        } else if (cmd == "m") {
+            try {
+                string equip, motivo, data;
+                cout << "Equipamento: ";   cin >> equip;
+                cout << "Motivo: ";        cin >> motivo;
+                cout << "Data prevista: "; cin >> data;
+                gerManutencao.proporManutencao(equip, motivo, data, acesso);
+            } catch (runtime_error& e) { cout << e.what() << endl; }
+
+        } else if (cmd == "a") {
+            try {
+                string equip;
+                cout << "Equipamento para aprovar: "; cin >> equip;
+                gerManutencao.aprovarManutencao(equip, acesso);
+            } catch (runtime_error& e) { cout << e.what() << endl; }
+
+        } else if (cmd == "r") {
+            try {
+                string equip, motivo;
+                cout << "Equipamento para recusar: "; cin >> equip;
+                cout << "Motivo da recusa: ";         cin >> motivo;
+                gerManutencao.recusarManutencao(equip, motivo, acesso);
+            } catch (runtime_error& e) { cout << e.what() << endl; }
+
+        } else if (cmd == "h") {
+            try {
+                gerManutencao.exibirHistorico(acesso);
+            } catch (runtime_error& e) { cout << e.what() << endl; }
+        }
+
+        this_thread::sleep_for(chrono::seconds(3));
+        ciclo++;
+    }
+
+    return 0;
+}

@@ -239,8 +239,21 @@ est_f, vaz_f = info_bomba('BOMBA-F')
 
 # Detecta alarmes
 alarmes_ativos = []
-if temp_mix is not None and temp_mix > 46.0: alarmes_ativos.append("TEMP MISTURA ACIMA DO SETPOINT")
-if temp_mix is not None and temp_mix < 44.0: alarmes_ativos.append("TEMP MISTURA ABAIXO DO SETPOINT")
+# Pega o setpoint atual do último comando enviado
+setpoint_atual = 45.0
+try:
+    if os.path.exists(ARQUIVO_COMANDOS):
+        with open(ARQUIVO_COMANDOS, 'r') as f:
+            cmd_data = json.load(f)
+            setpoint_atual = float(cmd_data.get('setpoint_temp', 45.0))
+except:
+    pass
+
+tolerancia = 2.0
+if temp_mix is not None and temp_mix > setpoint_atual + tolerancia:
+    alarmes_ativos.append(f"TEMP MISTURA ACIMA DO SETPOINT ({temp_mix:.1f}°C > {setpoint_atual+tolerancia:.1f}°C)")
+if temp_mix is not None and temp_mix < setpoint_atual - tolerancia:
+    alarmes_ativos.append(f"TEMP MISTURA ABAIXO DO SETPOINT ({temp_mix:.1f}°C < {setpoint_atual-tolerancia:.1f}°C)")
 if nivel    is not None and nivel    >= 82.5: alarmes_ativos.append("NIVEL ALTO NO TANQUE")
 if nivel    is not None and nivel    <= 27.5: alarmes_ativos.append("NIVEL BAIXO NO TANQUE")
 if pressao  is not None and pressao  >= 6.5:  alarmes_ativos.append("PRESSAO ALTA NA SAIDA")
@@ -296,7 +309,8 @@ with col_res:
 with col_tanque:
     st.markdown("<div class='secao-titulo'>🏺 TANQUE DE MISTURA — TQ-MIX</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(card("TQ-MIX-TT  Temperatura", temp_mix, "°C", 44.0, 46.0), unsafe_allow_html=True)
+    with c1: st.markdown(card("TQ-MIX-TT  Temperatura", temp_mix, "°C",
+                           setpoint_atual - 2.0, setpoint_atual + 2.0), unsafe_allow_html=True)
     with c2: st.markdown(card("TQ-MIX-LT  Nível",       nivel,    "%",  27.5, 82.5), unsafe_allow_html=True)
     with c3: st.markdown(card("TQ-MIX-PT  Pressão",     pressao,  "BAR",None, 6.5),  unsafe_allow_html=True)
 
@@ -356,13 +370,14 @@ with col_cmd:
     eh_operador = st.session_state.perfil == "operador"
     eh_admin    = st.session_state.perfil == "admin"
 
-    def enviar_comando(setpoint, vazao, mq, mf, estop, desc):
+    def enviar_comando(setpoint, vazao, mq, mf, estop, desc, resetar=False):
         dados = {
             "setpoint_temp":    float(setpoint),
             "vazao_alvo":       float(vazao),
             "override_bomba_q": bool(mq),
             "override_bomba_f": bool(mf),
             "parada_emergencia":bool(estop),
+            "resetar_alarmes":  bool(resetar),
             "operador_ativo":   st.session_state.usuario
         }
         with open(ARQUIVO_COMANDOS, 'w') as f:
@@ -375,12 +390,21 @@ with col_cmd:
     cc1, cc2, cc3 = st.columns([3, 2, 2])
 
     with cc1:
-        with st.form("form_sp"):
-            sp = st.slider("Setpoint Temperatura (°C)", 21.0, 69.0, 45.0, step=0.5)
-            vz = st.number_input("Volume (L/min)", 10.0, 100.0, 60.0, step=5.0)
-            if st.form_submit_button("✅ Aplicar Setpoint", use_container_width=True):
-                enviar_comando(sp, vz, False, False, False, f"Setpoint → {sp}°C | {vz} L/min")
-                st.success("Enviado!")
+        st.markdown("<div style='font-size:0.75rem;color:#aaa;'>Solicitar Processo</div>", unsafe_allow_html=True)
+        with st.form("form_processo"):
+            temp_proc = st.slider("Temperatura desejada (°C)", 21.0, 69.0, 45.0, step=0.5)
+            vol_proc  = st.number_input("Volume desejado (L)", 10.0, 500.0, 100.0, step=10.0)
+            if st.form_submit_button("▶️ Iniciar Processo", use_container_width=True):
+                enviar_comando(temp_proc, 60.0, False, False, False,
+                            f"Processo → {temp_proc}°C | {vol_proc:.0f} L")
+                with open('processo.json', 'w') as f:
+                    json.dump({
+                        "temperatura": float(temp_proc),
+                        "volume":      float(vol_proc),
+                        "usuario":     st.session_state.usuario,
+                        "timestamp":   datetime.now().strftime("%H:%M:%S")
+                    }, f, indent=4)
+                st.success(f"Processo solicitado: {vol_proc:.0f} L a {temp_proc}°C")
 
     with cc2:
         st.markdown("<div style='font-size:0.75rem;color:#aaa;'>Atuadores Manuais</div>", unsafe_allow_html=True)
@@ -398,6 +422,13 @@ with col_cmd:
             enviar_comando(0.0, 0.0, False, False, True, "PARADA DE EMERGÊNCIA")
             st.error("Emergência acionada!")
         st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+        
+        # NOVO: botão de retomada após emergência
+        if st.button("▶️ Retomar Processo", use_container_width=True, disabled=not eh_admin):
+            enviar_comando(setpoint_atual, 60.0, False, False, False, "RETOMADA APOS EMERGENCIA")
+            st.success("Processo retomado.")
+        st.markdown("<div style='margin:4px'></div>", unsafe_allow_html=True)
+        
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.logado = False
             st.rerun()
@@ -420,7 +451,134 @@ with col_alarm:
     else:
         st.markdown("<div style='font-size:0.72rem;color:#555;'>Nenhum comando nesta sessão.</div>",
                     unsafe_allow_html=True)
+    
+    # Detecta conclusão de processo via alarmes do C++
+    if not df_alarmes.empty:
+        ultimos = df_alarmes.tail(5)
+        for _, row in ultimos.iterrows():
+            cod = str(row.get('codigo', ''))
+            if 'PROCESSO_CONCLUIDO' in cod:
+                st.markdown("<div class='normal-linha'>✅ PROCESSO CONCLUÍDO — Volume entregue com sucesso</div>",
+                            unsafe_allow_html=True)
+                break
+            if 'PROCESSO_INTERROMPIDO' in cod:
+                st.markdown("<div class='alarme-linha'>⚠️ PROCESSO INTERROMPIDO — Nível insuficiente</div>",
+                            unsafe_allow_html=True)
+                break
+            
+    if st.button("🔕 Reconhecer Alarmes", use_container_width=True):
+        enviar_comando(setpoint_atual, 60.0, False, False, False,
+                    "Alarmes reconhecidos", resetar=True)
 
+<<<<<<< HEAD
+=======
+st.markdown("<hr>", unsafe_allow_html=True)
+col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+with col_dl1:
+    if os.path.exists(CSV_HISTORICO):
+        with open(CSV_HISTORICO, 'r') as f:
+            st.download_button(
+                "⬇️ Baixar historico.csv",
+                data=f.read(),
+                file_name="historico_eb61.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+with col_dl2:
+    if os.path.exists('historico_alarmes.txt'):
+        with open('historico_alarmes.txt', 'r', encoding='utf-8', errors='ignore') as f:
+            st.download_button(
+                "⬇️ Baixar historico_alarmes.txt",
+                data=f.read(),
+                file_name="historico_alarmes.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+
+with col_dl3:
+    if os.path.exists('historico_acoes.txt'):
+        with open('historico_acoes.txt', 'r', encoding='utf-8', errors='ignore') as f:
+            st.download_button(
+                "⬇️ Baixar historico_acoes.txt",
+                data=f.read(),
+                file_name="historico_acoes.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+
+st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("<div class='secao-titulo'>🔧 GESTÃO DE MANUTENÇÃO</div>",
+            unsafe_allow_html=True)
+
+eh_tecnico = st.session_state.perfil in ["tecnico", "admin"]
+
+ARQUIVO_MANUTENCAO = 'manutencao.json'
+
+def enviar_manutencao(acao, equipamento="", motivo="", data="", motivo_recusa=""):
+    dados = {
+        "acao":          acao,
+        "equipamento":   equipamento,
+        "motivo":        motivo,
+        "data":          data,
+        "motivo_recusa": motivo_recusa,
+        "usuario":       st.session_state.usuario,
+        "perfil":        st.session_state.perfil,
+        "timestamp":     datetime.now().strftime("%H:%M:%S")
+    }
+    with open(ARQUIVO_MANUTENCAO, 'w') as f:
+        json.dump(dados, f, indent=4)
+    hora = datetime.now().strftime("%H:%M:%S")
+    st.session_state.historico_comandos.insert(
+        0, f"[{hora}] {st.session_state.usuario}: Manutenção {acao} - {equipamento}"
+    )
+
+col_m1, col_m2, col_m3 = st.columns(3)
+
+with col_m1:
+    st.markdown("**Propor Manutenção** *(Técnico/Admin)*")
+    with st.form("form_manutencao"):
+        equip_prop  = st.text_input("Equipamento", placeholder="Ex: BOMBA-Q1")
+        motivo_prop = st.text_input("Motivo", placeholder="Ex: Vibração anormal")
+        data_prop   = st.text_input("Data prevista", placeholder="Ex: 2025-07-01")
+        if st.form_submit_button("📋 Propor", disabled=not eh_tecnico):
+            if not eh_tecnico:
+                st.error("Acesso negado: apenas Técnico ou Admin.")
+            elif equip_prop and motivo_prop and data_prop:
+                enviar_manutencao("PROPOR", equip_prop, motivo_prop, data_prop)
+                st.success("Proposta enviada ao C++.")
+            else:
+                st.warning("Preencha todos os campos.")
+
+with col_m2:
+    st.markdown("**Aprovar Manutenção** *(Admin)*")
+    with st.form("form_aprovar"):
+        equip_apr = st.text_input("Equipamento a aprovar")
+        if st.form_submit_button("✅ Aprovar", disabled=not eh_admin):
+            if not eh_admin:
+                st.error("Acesso negado: apenas Admin.")
+            elif equip_apr:
+                enviar_manutencao("APROVAR", equip_apr)
+                st.success("Aprovação enviada ao C++.")
+            else:
+                st.warning("Informe o equipamento.")
+
+with col_m3:
+    st.markdown("**Recusar Manutenção** *(Admin)*")
+    with st.form("form_recusar"):
+        equip_rec  = st.text_input("Equipamento a recusar")
+        motivo_rec = st.text_input("Motivo da recusa")
+        if st.form_submit_button("❌ Recusar", disabled=not eh_admin):
+            if not eh_admin:
+                st.error("Acesso negado: apenas Admin.")
+            elif equip_rec and motivo_rec:
+                enviar_manutencao("RECUSAR", equip_rec, motivo_recusa=motivo_rec)
+                st.success("Recusa enviada ao C++.")
+            else:
+                st.warning("Preencha todos os campos.")
+# ============================================================
+>>>>>>> 6b98258e598dc89de01faf5336c01f44c23c8938
 # ATUALIZAÇÃO AUTOMÁTICA
 time.sleep(5)
 st.rerun()

@@ -1,8 +1,17 @@
 {
+<<<<<<< HEAD
     "setpoint_temp": 39.5,
     "vazao_alvo": 25.0,
     "override_bomba_q": false,
     "override_bomba_f": false,
     "parada_emergencia": false,
+=======
+    "setpoint_temp": 53.5,
+    "vazao_alvo": 60.0,
+    "override_bomba_q": false,
+    "override_bomba_f": false,
+    "parada_emergencia": false,
+    "resetar_alarmes": false,
+>>>>>>> 6b98258e598dc89de01faf5336c01f44c23c8938
     "operador_ativo": "Administrador"
 }

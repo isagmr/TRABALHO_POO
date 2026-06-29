@@ -4,6 +4,7 @@ Repositório criado para o trabalho de Programação Orientada a Objetos desenvo
 DESENVOLVEDORES:
 ISABELA GIMENES MAGALHÃES RIBEIRO _ 20251CECA0369
 STEPHANY BARBOSA AMARAL _ 20251CECA0091
+ID_DUPLA = 61
 
                                 DESCRIÇÃO DO PROJETO
 Este projeto é um simulador de um sistema SCADA (Supervisory Control and Data Acquisition) desenvolvido em C++ para uma Planta de Mistura de Água Quente e Fria. O sistema simula o chão de fábrica (sensores, válvulas e bombas), o processamento automatizado (regras de controle) e a administração industrial (gestão de manutenções, níveis de acesso e histórico de alarmes).
@@ -68,3 +69,31 @@ Utilizadores pré-cadastrados para teste:
 - Administrador: Usuário admin | Senha admin123
 - Técnico: Usuário tecnico | Senha tec456
 - Operador: Usuário operador | Senha op789
+
+## COMO COMPILAR E EXECUTAR
+
+**Pré-requisitos:** g++ com suporte a C++17 e Python 3 com pip instalado.
+
+    **C++ (simulador do chão de fábrica):**
+        g++ *.cpp -o isaste -std=c++17
+        ./isaste
+    **Supervisório Python (interface web):**
+        pip install streamlit pandas
+        python3 -m streamlit run supervisor.py
+
+**Ordem de execução recomendada:**
+    1. Compile e inicie o C++ primeiro
+    2. Faça login com um dos usuários de teste
+    3. Digite `p` no terminal para ativar o modo automático
+    4. Em outro terminal, inicie o Streamlit
+    5. Acesse `http://localhost:8501` no navegador
+
+## ARQUIVOS GERADOS PELO SISTEMA
+
+Durante a execução, o programa cria e atualiza automaticamente os seguintes arquivos na pasta do projeto:
+
+- `leituras.json` — leituras dos sensores em tempo real, consumido pelo Streamlit
+- `comandos.json` — comandos enviados pelo supervisório ao C++
+- `historico.csv` — histórico completo de leituras exportável
+- `historico_alarmes.txt` — registro permanente de todos os alarmes disparados
+- `historico_acoes.txt` — registro permanente de todas as ações dos operadores
