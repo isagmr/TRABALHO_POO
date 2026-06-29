@@ -97,3 +97,19 @@ Durante a execução, o programa cria e atualiza automaticamente os seguintes ar
 - `historico.csv` — histórico completo de leituras exportável
 - `historico_alarmes.txt` — registro permanente de todos os alarmes disparados
 - `historico_acoes.txt` — registro permanente de todas as ações dos operadores
+
+## CONTRATO DE COMUNICAÇÃO (JSON)
+
+**leituras.json** — C++ → Python (JSON Lines, uma linha por leitura)
+Campos: tipo, sensor, valor, unidade, status, timestamp, ciclo
+
+**comandos.json** — Python → C++ (JSON padrão)
+Campos: setpoint_temp, vazao_alvo, override_bomba_q, override_bomba_f,
+        parada_emergencia, resetar_alarmes, operador_ativo
+
+**processo.json** — Python → C++ (pedido de processo)
+Campos: temperatura, volume, usuario, timestamp
+
+**manutencao.json** — Python → C++ (gestão de manutenção)
+Campos: acao (PROPOR/APROVAR/RECUSAR), equipamento, motivo, data,
+        motivo_recusa, usuario, perfil, timestamp
