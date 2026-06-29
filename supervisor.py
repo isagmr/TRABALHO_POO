@@ -116,9 +116,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
+
 # ESTADO DE SESSÃO
-# ============================================================
 if 'logado' not in st.session_state:
     st.session_state.logado   = False
     st.session_state.perfil   = None
@@ -126,9 +125,7 @@ if 'logado' not in st.session_state:
 if 'historico_comandos' not in st.session_state:
     st.session_state.historico_comandos = []
 
-# ============================================================
 # LOGIN
-# ============================================================
 if not st.session_state.logado:
     st.markdown("""
     <div style='text-align:center; padding: 60px 0 20px 0;'>
@@ -159,9 +156,7 @@ if not st.session_state.logado:
                     st.error("Usuário ou senha incorretos.")
     st.stop()
 
-# ============================================================
 # LEITURA DO JSON
-# ============================================================
 df_geral = pd.DataFrame()
 erro_msg = ""
 
@@ -186,9 +181,7 @@ if not df_geral.empty:
     except:
         pass
 
-# ============================================================
 # PREPARA DADOS
-# ============================================================
 df_pivot     = pd.DataFrame()
 df_atuadores = pd.DataFrame()
 df_alarmes   = pd.DataFrame()
@@ -259,9 +252,7 @@ if not df_alarmes.empty:
         if cod and cod not in alarmes_ativos:
             alarmes_ativos.append(f"[C++] {cod}")
 
-# ============================================================
 # CABEÇALHO
-# ============================================================
 agora = datetime.now().strftime("%d/%m/%Y  %H:%M:%S")
 perfil_txt = st.session_state.perfil.upper()
 usuario_txt = st.session_state.usuario
@@ -285,9 +276,7 @@ if st.session_state.get('mostrar_sair'):
         st.session_state.logado = False
         st.rerun()
 
-# ============================================================
 # LINHA 1: RESERVATÓRIOS | TANQUE | BOMBAS
-# ============================================================
 col_res, col_tanque, col_bombas = st.columns([2, 3, 2])
 
 with col_res:
@@ -358,9 +347,7 @@ with col_bombas:
         st.markdown("<div style='font-size:0.7rem;color:#aaa;'>📊 Histórico Nível</div>", unsafe_allow_html=True)
         st.line_chart(df_pivot[['TQ-MIX-LT']].tail(30), height=80, use_container_width=True)
 
-# ============================================================
 # LINHA 2: COMANDOS | ALARMES
-# ============================================================
 st.markdown("<hr>", unsafe_allow_html=True)
 col_cmd, col_alarm = st.columns([3, 2])
 
@@ -434,8 +421,6 @@ with col_alarm:
         st.markdown("<div style='font-size:0.72rem;color:#555;'>Nenhum comando nesta sessão.</div>",
                     unsafe_allow_html=True)
 
-# ============================================================
 # ATUALIZAÇÃO AUTOMÁTICA
-# ============================================================
 time.sleep(5)
 st.rerun()
